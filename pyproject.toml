@@ -21,3 +21,7 @@ include = ["imkerutils*"]
 [project.scripts]
 extract-tile = "imkerutils.tiling.extract_tile:main"
 paste-tile = "imkerutils.tiling.paste_tile:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# addopts = "-q"
