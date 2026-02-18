@@ -19,8 +19,8 @@ where = ["."]
 include = ["imkerutils*"]
 
 [project.scripts]
-extract-tile = "imkerutils.tiling.extract_tile:main"
-paste-tile = "imkerutils.tiling.paste_tile:main"
+extract-tile = "imkerutils.tiling_utils.extract_tile:main"
+paste-tile = "imkerutils.tiling_utils.paste_tile:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
