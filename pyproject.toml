@@ -1,7 +1,20 @@
 [project]
 name = "imkerutils"
 version = "0.1.0"
-description = "Add your description here"
+description = "Image processing utilities, especially for working alongside LLM/Diff/VIT models."
 readme = "README.md"
-requires-python = ">=3.13"
-dependencies = []
+requires-python = ">=3.10"
+dependencies = ["Pillow>=10"]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+# Package discovery: include imkerutils and all subpackages (imkerutils.*)
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["imkerutils*"]
+
+[project.scripts]
+extract-tile = "imkerutils.tiling.extract_tile:main"
+paste-tile = "imkerutils.tiling.paste_tile:main"
