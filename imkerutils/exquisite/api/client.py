@@ -51,3 +51,7 @@ class GeneratorPermanentError(GeneratorError):
 
 class GeneratorSafetyRefusal(GeneratorError):
     """Model refused due to safety policy (later)."""
+
+
+class GeneratorBillingLimitError(GeneratorPermanentError):
+    """Requests are blocked because the account/org is at a billing hard limit."""

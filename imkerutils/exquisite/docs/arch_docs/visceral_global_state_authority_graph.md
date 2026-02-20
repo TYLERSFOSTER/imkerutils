@@ -12,47 +12,42 @@ This document provides two Mermaid diagrams of the **runtime system graph** desc
 ## Diagram 1 — High-level (Abstract Roles & Authorities)
 
 ```mermaid
-flowchart TB
-  %% High-level roles (authority uniqueness)
-  subgraph Human[Human Operator]
-    H1[Engineer / Project Owner]
-    HM[State Model x̂(t)]
+flowchart LR
+  subgraph Human
+    H1[Engineer_Project_Owner]
+    HM[State_Estimate_x_hat_t]
   end
 
-  subgraph System[Runtime System (Reality x(t))]
-    GWA[Gateway Authority]
-    CFA[Config Authority]
-    IDA[Identity Authority]
-    NTA[Network Authority]
-    CLA[Client Authority]
-    OBS[Observability Authority]
+  subgraph System
+    SYS[Runtime_System_x_t]
+    GWA[Gateway_Authority]
+    CFA[Config_Authority]
+    IDA[Identity_Authority]
+    NTA[Network_Authority]
+    CLA[Client_Authority]
+    OBS[Observability_Authority]
   end
 
-  subgraph Discipline[Corrective Discipline]
-    GSR[Global State Reconstruction
-(rebuild runtime graph)]
-    AB[Authority Binding
-(unique referents)]
-    VG[Verification Gate
-(invariants + tests)]
+  subgraph Discipline
+    GSR[Global_State_Reconstruction]
+    AB[Authority_Binding]
+    VG[Verification_Gate]
   end
 
-  H1 -->|observes| OBS
-  OBS -->|produces evidence| HM
-  HM -->|controls actions u(t)=f(x̂(t))| System
+  H1 --> OBS
+  OBS --> HM
+  HM --> SYS
 
-  GSR -->|enumerate nodes+edges| System
-  AB -->|bind unique authorities| System
-  VG -->|validate coherency| System
+  GSR --> SYS
+  AB --> SYS
+  VG --> SYS
 
-  %% Authority uniqueness principle
   GWA --- CFA
   GWA --- IDA
   GWA --- NTA
   GWA --- CLA
 
-  %% Failure mode: local consistency vs global incorrectness
-  HM -. model drift .- System
+  HM -.-> SYS
 ```
 
 **Reading guide:**
@@ -65,118 +60,99 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-  %% Nitty-gritty runtime graph: processes, configs, identity stores, sockets, tunnels, clients, caches.
-
-  %% --- Server side / Deployment ---
-  subgraph S[Server / Deployment Reality]
-    subgraph P[Processes]
-      GW[openclaw-gateway (PID X)]
-      PX[shadow gateway (PID Y)?]
-      PR[reverse proxy?]
+  subgraph Server
+    subgraph Processes
+      GW[gateway_PID_X]
+      PX[shadow_gateway_PID_Y]
+      PR[reverse_proxy]
     end
 
-    subgraph C[Config Roots]
-      CF1[/etc/openclaw/config.json]
-      CF2[/home/foster/.openclaw/config.json]
-      CF3[container-mounted config?]
+    subgraph ConfigRoots
+      CF1[etc_openclaw_config_json]
+      CF2[home_foster_dot_openclaw_config_json]
+      CF3[container_mounted_config]
     end
 
-    subgraph I[Identity Stores]
-      ID1[/home/foster/.openclaw/identities/]
-      ID2[container identity store?]
-      ID3[browser-local token cache?]
+    subgraph IdentityStores
+      ID1[home_foster_dot_openclaw_identities]
+      ID2[container_identity_store]
+      ID3[browser_token_cache]
     end
 
-    subgraph N[Network Endpoints]
-      S4[127.0.0.1:18789 (ws/http)]
-      S6[[::1]:18789 (ws/http)]
-      PUB[public ingress / load balancer]
+    subgraph NetworkEndpoints
+      S4[ipv4_local_18789_ws_http]
+      S6[ipv6_local_18789_ws_http]
+      PUB[public_ingress]
     end
 
-    subgraph O[Observability]
-      JL[journalctl logs]
-      LS[lsof / netstat]
-      PS[ps / systemd status]
+    subgraph Observability
+      JL[journalctl]
+      LS[lsof_netstat]
+      PS[ps_systemd]
     end
   end
 
-  %% --- Client side / Operator environment ---
-  subgraph U[Client / Operator Reality]
-    subgraph UI[UI Surface]
-      BR[Browser UI]
-      VS[VSCode / Code Helper]
-      CLI[CLI (curl / ssh)]
+  subgraph Client
+    subgraph UISurface
+      BR[browser_ui]
+      VS[vscode_helper]
+      CLI[curl_ssh]
     end
 
-    subgraph T[Tunnels & Port Maps]
-      SSH[ssh -L local:remote]
-      L4[127.0.0.1:18789 local listener]
-      L5[127.0.0.1:18790 local listener]
-      V6[::1:18789 local v6 listener]
+    subgraph Tunnels
+      SSH[ssh_local_forward]
+      L4[local_ipv4_18789]
+      L5[local_ipv4_18790]
+      V6[local_ipv6_18789]
     end
 
-    subgraph K[Client Identity / Cache]
-      KC[Keychain / local secrets]
-      LS1[LocalStorage / IndexedDB]
-      CK[Cookies]
+    subgraph ClientCache
+      KC[keychain]
+      LS1[localstorage_indexeddb]
+      CK[cookies]
     end
   end
 
-  %% --- Edges: what reads what; what connects to what ---
-  %% Process config bindings
-  GW -->|reads config| CF1
-  GW -->|reads config| CF2
-  PX -->|reads config| CF3
+  GW --> CF1
+  GW --> CF2
+  PX --> CF3
 
-  %% Identity bindings
-  GW -->|validates tokens against| ID1
-  PX -->|validates tokens against| ID2
-  BR -->|stores token in| LS1
-  BR -->|stores session in| CK
-  KC -->|stores ssh keys / creds| CLI
+  GW --> ID1
+  PX --> ID2
+  BR --> LS1
+  BR --> CK
+  KC --> CLI
 
-  %% Listening sockets
-  GW -->|listens| S4
-  GW -->|listens| S6
-  PR -->|fronts| PUB
+  GW --> S4
+  GW --> S6
+  PR --> PUB
 
-  %% Client connections (intended)
-  BR -->|connects ws/http| L4
-  CLI -->|curl/ws test| L4
-  L4 -->|tunnels to| S4
-  L5 -->|tunnels to| S4
-  V6 -->|tunnels to| S6
-  SSH -->|creates| L4
-  SSH -->|creates| L5
-  SSH -->|creates| V6
+  BR --> L4
+  CLI --> L4
+  L4 --> S4
+  L5 --> S4
+  V6 --> S6
+  SSH --> L4
+  SSH --> L5
+  SSH --> V6
 
-  %% Observability evidence feeding model
-  JL -->|evidence| CLI
-  LS -->|evidence| CLI
-  PS -->|evidence| CLI
+  JL --> CLI
+  LS --> CLI
+  PS --> CLI
 
-  %% --- Split-brain / Referential ambiguity hotspots ---
-  %% Multiple authorities for "gateway"
-  GW -. ambiguity: which PID is the gateway? .- PX
+  GW -.-> PX
+  CF1 -.-> CF2
+  CF2 -.-> CF3
+  ID1 -.-> ID2
+  ID3 -.-> ID1
+  S4 -.-> S6
+  L4 -.-> V6
+  VS -.-> L4
 
-  %% Multiple config roots
-  CF1 -. ambiguity: which config is loaded? .- CF2
-  CF2 -. ambiguity .- CF3
-
-  %% Multiple identity stores
-  ID1 -. ambiguity: which identity store is authoritative? .- ID2
-  ID3 -. ambiguity: browser cache vs server identity store .- ID1
-
-  %% IPv4 vs IPv6 confusion
-  S4 -. mismatch: IPv4 reachable .- S6
-  L4 -. mismatch: local v4 listener differs .- V6
-  VS -. may bind local port unexpectedly .- L4
-
-  %% Normalization of deviance: local OK signals
-  L4 -->|local OK: port open| BR
-  S4 -->|server OK: listening| CLI
-  CF2 -->|exists| CLI
-  ID1 -->|exists| CLI
+  L4 --> BR
+  S4 --> CLI
+  CF2 --> CLI
+  ID1 --> CLI
 ```
 
 **Reading guide (nitty-gritty):**

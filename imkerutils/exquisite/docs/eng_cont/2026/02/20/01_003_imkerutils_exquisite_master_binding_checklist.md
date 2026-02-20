@@ -32,10 +32,10 @@ Source of truth for “done”: `imkerutils_exquisite_engineer_notes.md`.
 - [x] `STEP_INPUT_BAND_CONTRACT = AXIS_DEPENDENT`
 - [x] `BAND_THICKNESS_PARAM = band_thickness_px`
 - [x] `OVERLAP_AUTHORITY = SESSION_PARAMETER`
-- [ ] `OVERLAP_PX = <integer>`  ← not yet bound (value missing)
-- [ ] `EXTENSION_LENGTH_PX = <integer>`  ← not yet bound (value missing)
-- [ ] `BAND_THICKNESS_PX = <integer>`  ← not yet bound (value missing)
-- [ ] `TARGET_CANVAS_SIZE_POLICY = <rule>`  ← not yet bound (see section D)
+- [x] `OVERLAP_PX = 512`
+- [x] `EXTENSION_LENGTH_PX = 512`
+- [x] `BAND_THICKNESS_PX = 1024`
+- [ ] `TARGET_CANVAS_SIZE_POLICY = <rule>`  ← not yet bound ???(see section D)
 
 ---
 
@@ -65,16 +65,16 @@ Source of truth for “done”: `imkerutils_exquisite_engineer_notes.md`.
 
 This binds **how expected dimensions evolve** per step (the “prediction” side).
 
-- [ ] `TARGET_DIMENSION_CONTRACT = AXIS_DEPENDENT_APPEND`
+- [x] `TARGET_DIMENSION_CONTRACT = AXIS_DEPENDENT_APPEND`
   - If extend_direction ∈ {right,left}: `W_next = W + extension_length_px`, `H_next = H`
   - If extend_direction ∈ {up,down}: `H_next = H + extension_length_px`, `W_next = W`
 
 - [ ] `ALLOWED_CANVAS_SIZES = <set>`
-  - Example: `{1024x512, 1024x1024, 1024x1536, ...}` (must be enumerated for v1)
+  - Example: `{1024x512, 1024x1024, 1024x1536, ...}` (must be enumerated for v1) Does this mean final image or tile???
 
-- [ ] `SESSION_START_CANVAS_SIZE = <WxH>` (must match initial canvas header)
+- [x] `SESSION_START_CANVAS_SIZE = <WxH>` (must match initial canvas header)
 - [ ] `STEP_TARGET_SIZE_RULE = FULL_TARGET_DIMENSIONS` (restate coupling to GPT output)
-- [ ] `DIMENSION_INVARIANT_CHECK = (actual_from_IMAGE_HEADER == expected_from_SESSION_STATE)`
+- [ ] `DIMENSION_INVARIANT_CHECK = (actual_from_IMAGE_HEADER == expected_from_SESSION_STATE)`. THERE'S SORT OF AN AXIS ISSUE HERE...
 
 ---
 
@@ -86,9 +86,9 @@ This binds **how expected dimensions evolve** per step (the “prediction” sid
 
 ### E1. Composite Geometry Contracts
 - [ ] `SEAM_ALIGNMENT_CONTRACT = <rule>`
-  - Defines exact pixel coordinates of overlap region on both sides for each direction.
+  - Defines exact pixel coordinates of overlap region on both sides for each direction. ?????????
 
-- [ ] `BLEND_RAMP_SPACE = <linear_rgb|gamma_corrected>` (must bind; current notes assume linear in uint8 math)
+- [ ] `BLEND_RAMP_SPACE = <linear_rgb|gamma_corrected>` (must bind; current notes assume linear in uint8 math) ????????
 
 ---
 
@@ -121,10 +121,10 @@ This binds **how expected dimensions evolve** per step (the “prediction” sid
 - [x] `PROMPT_AUTHORITY_CONTRACT = ACCEPTED`
 
 ### H1. Prompt Storage Schema (must be bound)
-- [ ] `PROMPT_FILENAME = prompt.txt`
-- [ ] `PROMPT_TEXT_AUTHORITY = prompt.txt` (explicitly bind)
+- [x] `PROMPT_FILENAME = prompt.txt`
+- [x] `PROMPT_TEXT_AUTHORITY = prompt.txt`
 - [ ] `PROMPT_HASH = <sha256|...>`
-- [ ] `PROMPT_REDACTION_POLICY = <none|...>`
+- [ ] `PROMPT_REDACTION_POLICY = <none|...>` ??????
 
 ---
 
@@ -133,7 +133,7 @@ This binds **how expected dimensions evolve** per step (the “prediction” sid
 - [x] `STEP_EXECUTOR_CONTRACT = ACCEPTED`
 
 ### I1. Step Metadata Schema (must be bound)
-- [ ] `STEP_METADATA_FILENAME = step_metadata.json`
+- [x] `STEP_METADATA_FILENAME = step_metadata.json`
 - [ ] `STEP_METADATA_FIELDS = <list>` (must enumerate)
 - [ ] `HASH_ALGO = <sha256|...>`
 - [ ] `CANVAS_HASH_POLICY = <when computed>`

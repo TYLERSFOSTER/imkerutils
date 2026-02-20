@@ -5,6 +5,7 @@ description = "Image processing utilities, especially for working alongside LLM/
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "openai>=2.21.0",
     "Pillow>=10",
     "pytest>=9.0.2",
 ]
@@ -24,4 +25,6 @@ paste-tile = "imkerutils.tiling_utils.paste_tile:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# addopts = "-q"
+markers = [
+  "integration: tests that hit real external services (network/billing); opt-in only",
+]
