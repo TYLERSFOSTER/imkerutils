@@ -1,31 +1,35 @@
 # imkerutils
-Image processing utilities.
-# imkerutils
 
-**Image processing infrastructure for large‑scale, tile‑based, and
+**Image processing infrastructure for large‑scale, tile‑based,
 model‑integrated workflows.**
 
-imkerutils is a Python package designed to provide deterministic,
-composable, and scalable image processing primitives, especially for
-workflows involving:
+imkerutils is a Python package providing deterministic, composable, and
+scalable image processing primitives for high‑resolution and arbitrarily
+large image systems.
 
--   Diffusion models
--   Vision transformers (ViT)
--   Large language model (LLM)‑driven image manipulation
--   Tile‑based gigapixel image pipelines
--   Seam‑preserving edits and recomposition
--   Structured image generation and reconstruction
-
-It is built to serve as foundational infrastructure for high‑resolution
-and arbitrarily large image processing systems.
+It now includes **Exquisite**, an image‑conditioned, tile‑native
+directional extension engine built on top of the core tiling
+architecture.
 
 ------------------------------------------------------------------------
 
-## Design principles
+# Core Focus
 
-imkerutils is built around the following core principles:
+imkerutils is designed for:
 
-### Deterministic pixel operations
+-   Diffusion model pipelines
+-   Vision transformers (ViT)
+-   Multimodal LLM‑driven image manipulation
+-   Tile‑based gigapixel image processing
+-   Seam‑preserving edits and recomposition
+-   Structured image generation and reconstruction
+-   Deterministic image extension workflows
+
+------------------------------------------------------------------------
+
+# Design Principles
+
+## Deterministic Pixel Operations
 
 All core operations preserve exact pixel identity unless explicitly
 modified.
@@ -36,18 +40,21 @@ This enables:
 -   Boundary‑preserving editing
 -   Exact recomposition
 -   Cryptographic reproducibility
+-   Verifiable seam invariants
 
-### Tile‑native architecture
+## Tile‑Native Architecture
 
-All image processing can be expressed in terms of fixed‑size tiles
-(default: 1024×1024), enabling:
+All processing is expressed in fixed‑size tiles (default: 1024×1024).
 
--   Arbitrary image sizes
--   Parallel processing
--   Distributed pipelines
--   Incremental modification
+This enables:
 
-### Explicit data locality
+-   Arbitrary image dimensions
+-   Incremental growth
+-   Distributed execution
+-   Model‑compatible patch conditioning
+-   Memory‑bounded processing
+
+## Explicit Data Locality
 
 Generated data is separated into:
 
@@ -56,188 +63,221 @@ Generated data is separated into:
 
 This ensures:
 
--   clean source trees
--   reproducible pipelines
--   explicit artifact tracking
+-   Clean source trees
+-   Deterministic artifact management
+-   Explicit step tracking
+-   Reproducible experiments
 
-### Model‑compatible workflows
+## Model‑Conditioned Workflows
 
-imkerutils is designed to integrate cleanly with:
+imkerutils integrates cleanly with:
 
--   diffusion models
--   segmentation models
--   ViTs
--   multimodal LLM pipelines
+-   Diffusion models
+-   Segmentation models
+-   Vision transformers
+-   Multimodal LLM pipelines
+-   Image inpainting APIs
+
+The architecture explicitly supports masked, image‑conditioned
+generation.
 
 ------------------------------------------------------------------------
 
-## Installation
+# New: Exquisite --- Directional Image Extension Engine
 
-### Development install
+Exquisite is a tile‑native application layer inside imkerutils that
+enables:
 
-Clone repository:
+-   Incremental image growth
+-   Directional extension (RIGHT / LEFT / UP / DOWN)
+-   Seam‑aware inpainting
+-   Conditioning‑band enforcement
+-   Deterministic canvas growth
+
+It operates by:
+
+1.  Extracting a 512px conditioning band from the canvas
+2.  Constructing a 1024×1024 reference tile
+3.  Creating an RGBA mask where only the new region is editable
+4.  Calling an image‑conditioned generator (e.g., OpenAI images.edits)
+5.  Enforcing conditioning band identity post‑generation
+6.  Splitting and gluing new content into the growing canvas
+
+The seam is physically possible because the model sees the real pixels
+it must extend.
+
+Exquisite is not a generic art tool --- it is a deterministic,
+model‑integrated image extension system built for scalable workflows.
+
+------------------------------------------------------------------------
+
+# Installation
+
+## Development Install
 
 ``` bash
 git clone git@github.com:TYLERSFOSTER/imkerutils
 cd imkerutils
-```
 
-Create environment:
-
-``` bash
 python -m venv .venv
 source .venv/bin/activate
-```
 
-Install editable:
-
-``` bash
 pip install -e .
 ```
 
 ------------------------------------------------------------------------
 
-## Quick start
+# Quick Start (Core Tiling)
 
-### Extract a tile
+## Extract a tile
 
 ``` bash
 extract-tile input.png --x 0 --y 0
 ```
 
-Output:
-
-    outputs/tiles/input__tl__0_0.png
-
-### Paste a tile
+## Paste a tile
 
 ``` bash
 paste-tile base.png tile.png --x 0 --y 0
 ```
 
-Output:
-
-    outputs/images/base__patched.png
-
-These operations preserve exact pixel identity outside the modified
-region.
+These operations preserve exact pixel identity outside modified regions.
 
 ------------------------------------------------------------------------
 
-## Python API
+# Quick Start (Exquisite)
+
+Run the directional extension UI:
+
+``` bash
+python -m imkerutils.exquisite.ui path/to/1024x1024_image.png
+```
+
+Then use the browser interface to:
+
+-   Enter a prompt
+-   Extend the canvas directionally
+-   Grow the image incrementally
+
+The system enforces: - Fixed tile size (1024×1024 per generation) -
+512px conditioning band - Deterministic canvas dimension growth -
+Post‑generation conditioning identity
+
+------------------------------------------------------------------------
+
+# Python API (Core)
 
 ``` python
 from imkerutils.tiling import extract_tile, paste_tile
 
-extract_tile(
-    "input.png",
-    "tile.png",
-    x=0,
-    y=0,
-)
-
-paste_tile(
-    "base.png",
-    "tile.png",
-    "output.png",
-    x=0,
-    y=0,
-)
+extract_tile("input.png", "tile.png", x=0, y=0)
+paste_tile("base.png", "tile.png", "output.png", x=0, y=0)
 ```
 
 ------------------------------------------------------------------------
 
-## Project structure
+# Project Structure (Current Ground Truth)
 
     imkerutils/
     │
     ├── imkerutils/
     │   ├── tiling/
+    │   ├── exquisite/
+    │   │   ├── api/
+    │   │   ├── geometry/
+    │   │   ├── pipeline/
+    │   │   ├── prompt/
+    │   │   ├── state/
+    │   │   └── ui/
     │   ├── paths.py
     │   └── _generated/
     │
     ├── outputs/
-    │
     ├── tests/
-    │
     └── pyproject.toml
 
 ------------------------------------------------------------------------
 
-## Generated data model
-
-imkerutils enforces strict separation of concerns:
-
-    imkerutils/_generated/
+# Generated Data Model
 
 Intermediate artifacts:
 
+    imkerutils/_generated/
+
+Contains:
+
 -   tiles
 -   masks
--   caches
-
-```{=html}
-<!-- -->
-```
-    outputs/
+-   session state
+-   step artifacts
+-   deterministic prompt hashes
 
 Final outputs:
 
+    outputs/
+
+Contains:
+
 -   stitched images
--   processed results
--   exported data
+-   final canvases
+-   processed exports
 
 ------------------------------------------------------------------------
 
-## Example workflow
+# Example Workflow
 
-    image → tiles → model → modified tiles → recomposition → output
-
-This allows arbitrary image sizes without loss of fidelity.
-
-------------------------------------------------------------------------
-
-## Roadmap
-
-Planned modules:
-
-    imkerutils.tiling
-    imkerutils.stitching
-    imkerutils.segmentation
-    imkerutils.diffusion
-    imkerutils.io
-    imkerutils.transforms
-    imkerutils.workspace
+    image
+     → extract band
+     → build reference tile
+     → mask editable region
+     → model edit
+     → enforce band identity
+     → split tile
+     → glue canvas
+     → grow image
 
 ------------------------------------------------------------------------
 
-## Guarantees
+# Roadmap
+
+Planned expansion:
+
+-   Seam blending strategies
+-   Quality control tuning hooks
+-   Prompt versioning registry
+-   Multi‑direction batch growth
+-   Distributed tile generation
+-   Deterministic cost accounting
+-   Model‑agnostic generator interface
+
+------------------------------------------------------------------------
+
+# Guarantees
 
 imkerutils guarantees:
 
 -   Exact pixel preservation unless explicitly modified
--   Deterministic transformations
--   Explicit artifact management
--   Scalable architecture
+-   Deterministic geometric transforms
+-   Explicit artifact separation
+-   Tile‑native scalability
+-   Conditioning‑band invariants (Exquisite)
 
 ------------------------------------------------------------------------
 
-## License
+# License
 
 MIT License
 
 ------------------------------------------------------------------------
 
-## Author
+# Author
 
 Tyler Foster
 
 ------------------------------------------------------------------------
 
-## Status
+# Status
 
 Active development.
 
-Production‑oriented design.
-
-API stability improving rapidly.
+Architecture stable. Application layer (Exquisite) maturing rapidly.
