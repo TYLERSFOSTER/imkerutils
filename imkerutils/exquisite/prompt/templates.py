@@ -9,12 +9,7 @@ from imkerutils.exquisite.geometry.tile_mode import ExtendMode
 @dataclass(frozen=True)
 class PlacementConvention:
     """
-    Human-readable, deterministic placement convention for the fixed 1024x1024 tile.
-
-    Conditioning band is always a 512px-thick strip taken from the current canvas.
-    It must appear in exactly one half of the returned 1024x1024 tile.
-
-    The other half is the newly-generated region.
+    Kept for compatibility / potential UI display, but NOT used to instruct the model.
     """
     mode: ExtendMode
     conditioning_where: str
@@ -22,7 +17,7 @@ class PlacementConvention:
 
 
 def placement_convention_for_mode(mode: ExtendMode) -> PlacementConvention:
-    # These strings are load-bearing: tests assert on them.
+    # These strings are load-bearing: tests may assert on them.
     if mode == "x_ltr":
         return PlacementConvention(
             mode=mode,
@@ -50,27 +45,48 @@ def placement_convention_for_mode(mode: ExtendMode) -> PlacementConvention:
     raise ValueError(f"Unknown mode: {mode}")
 
 
-SYSTEM_PREAMBLE = """\
-You are an image generator operating in TILE MODE.
+def _direction_word(mode: ExtendMode) -> str:
+    # Human phrasing that matches what you want to prompt.
+    if mode == "x_ltr":
+        return "RIGHT"
+    if mode == "x_rtl":
+        return "LEFT"
+    if mode == "y_ttb":
+        return "DOWN"
+    if mode == "y_btt":
+        return "UP"
+    raise ValueError(f"Unknown mode: {mode}")
 
-Hard contract:
-- Output MUST be exactly 1024x1024 pixels.
-- The conditioning band provided MUST appear exactly in the specified half of the tile.
-- The other half MUST be newly generated content that extends the scene coherently.
+
+SYSTEM_PREAMBLE = """\
+You are given an image.
+
+Your task is to EXTEND this image seamlessly in the specified direction.
+
+Hard requirements:
+- Preserve all existing pixels exactly as they appear in the given image.
+- Continue the scene naturally into the new area.
+- Do not redesign, restyle, re-render, reframe, zoom, rotate, or change perspective.
+- Do not "clean up" or "enhance" the existing region (no denoise/sharpen/smoothing).
+- The seam between existing and new content must be visually imperceptible.
+
+If uncertain, choose the option that best preserves continuity with the given image.
 """
 
 
 STYLE_LOCK_DEFAULT = """\
-Style constraints:
-- Preserve the overall visual style and local texture continuity across the seam.
-- Do not introduce borders, frames, watermarks, or captions.
+Style continuation requirements:
+- Match the style already present in the given image (whatever it is).
+- Match line weight / texture / detail density / lighting logic / palette (if any).
+- Continue patterns, edges, and objects across the seam without discontinuity.
 """
 
 
 NEGATIVE_DEFAULT = """\
-Negative constraints:
-- Do not resize, crop, rotate, or distort the conditioning region.
-- Do not alter the conditioning region content.
+Do NOT:
+- introduce borders, frames, captions, logos, watermarks, or UI elements
+- shift the image, warp it, crop it, or change camera/viewpoint
+- reinterpret the existing content in a new artistic direction
 """
 
 
@@ -81,21 +97,17 @@ def render_prompt(
     style_lock: str | None,
     negative: str | None,
 ) -> str:
-    conv = placement_convention_for_mode(mode)
+    direction = _direction_word(mode)
 
     style = STYLE_LOCK_DEFAULT if style_lock is None else style_lock.strip() + "\n"
     neg = NEGATIVE_DEFAULT if negative is None else negative.strip() + "\n"
 
-    # Deterministic layout (ordering matters: tests rely on stable formatting).
+    # Deterministic layout.
     return (
         f"{SYSTEM_PREAMBLE}\n"
-        f"Extend mode: {mode}\n"
-        f"Placement convention:\n"
-        f"- Conditioning band MUST be placed in: {conv.conditioning_where}\n"
-        f"- Newly generated region MUST occupy: {conv.new_where}\n"
-        f"\n"
+        f"Direction: extend the image to the {direction}.\n\n"
         f"{style}\n"
         f"{neg}\n"
-        f"User prompt:\n"
+        f"User request:\n"
         f"{user_prompt}\n"
     )

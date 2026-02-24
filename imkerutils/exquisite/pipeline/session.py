@@ -5,6 +5,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional, Tuple
+from imkerutils.exquisite.api.client import TileGeneratorClient, GeneratorError
 
 from PIL import Image
 
@@ -190,6 +191,102 @@ class ExquisiteSession:
         atomic_write_text(self.state.state_path, json.dumps(self.state.to_dict(), indent=2, sort_keys=True) + "\n")
 
         # commit marker LAST (signals step dir is complete)
+        atomic_write_text(step_dir / "committed.ok", "ok\n")
+
+        return DiskStepResult("committed", self.state.session_id, step_index_next, (w0, h0), (w1, h1), str(step_dir))
+
+    def execute_step_real(
+        self,
+        *,
+        prompt: str,
+        client: TileGeneratorClient,
+        enforce_band_identity: bool = True,
+        post_enforce_band_identity: bool = True,
+    ) -> DiskStepResult:
+        """
+        Real generator step (networked via injected client), disk-authoritative.
+
+        post_enforce_band_identity default True:
+          - we overwrite the conditioning half in the returned tile with the extracted band
+            BEFORE splitting/gluing, so slight model drift cannot break the invariant.
+        """
+        # load authoritative canvas
+        canvas = Image.open(self.state.canvas_path).convert("RGB")
+        w0, h0 = canvas.size
+
+        mode = self.state.mode
+        step_index_next = self.state.step_index_current + 1
+        step_dir = self.state.step_dir(step_index_next)
+        step_dir.mkdir(parents=True, exist_ok=True)
+
+        # Phase B invariant: non-growing axis remains 1024
+        if mode in ("x_ltr", "x_rtl") and h0 != TILE_PX:
+            return DiskStepResult("rejected", self.state.session_id, step_index_next, (w0, h0), (w0, h0), str(step_dir))
+        if mode in ("y_ttb", "y_btt") and w0 != TILE_PX:
+            return DiskStepResult("rejected", self.state.session_id, step_index_next, (w0, h0), (w0, h0), str(step_dir))
+
+        band = extract_conditioning_band(canvas, mode)
+
+        try:
+            tile = client.generate_tile(
+                conditioning_band=band,
+                mode=mode,
+                prompt=prompt,
+                step_index=step_index_next,
+            )
+        except GeneratorError:
+            return DiskStepResult("rejected", self.state.session_id, step_index_next, (w0, h0), (w0, h0), str(step_dir))
+        except Exception:
+            return DiskStepResult("rejected", self.state.session_id, step_index_next, (w0, h0), (w0, h0), str(step_dir))
+
+        tile = tile.convert("RGB")
+
+        # Hard invariant: tile must be 1024x1024
+        if tile.size != (TILE_PX, TILE_PX):
+            return DiskStepResult("rejected", self.state.session_id, step_index_next, (w0, h0), (w0, h0), str(step_dir))
+
+        if post_enforce_band_identity:
+            # overwrite conditioning half in-place according to convention
+            if mode == "x_ltr":
+                tile.paste(band, (0, 0))
+            elif mode == "x_rtl":
+                tile.paste(band, (512, 0))
+            elif mode == "y_ttb":
+                tile.paste(band, (0, 0))
+            elif mode == "y_btt":
+                tile.paste(band, (0, 512))
+            else:
+                return DiskStepResult("rejected", self.state.session_id, step_index_next, (w0, h0), (w0, h0), str(step_dir))
+
+        cond_half, new_half = split_tile(tile, mode)
+
+        if enforce_band_identity:
+            if cond_half.tobytes() != band.tobytes():
+                return DiskStepResult("rejected", self.state.session_id, step_index_next, (w0, h0), (w0, h0), str(step_dir))
+
+        canvas_next = glue(canvas, new_half, mode)
+        w1, h1 = canvas_next.size
+
+        exp_w, exp_h = expected_next_canvas_size(canvas, mode)
+        if (w1, h1) != (exp_w, exp_h):
+            return DiskStepResult("rejected", self.state.session_id, step_index_next, (w0, h0), (w0, h0), str(step_dir))
+
+        # --- write step artifacts first (no authority changes yet) ---
+        atomic_write_text(step_dir / "prompt.txt", prompt + "\n")
+        atomic_write_with(step_dir / "conditioning_band.png", lambda p: band.save(p, format="PNG"))
+        atomic_write_with(step_dir / "tile_full.png", lambda p: tile.save(p, format="PNG"))
+        atomic_write_with(step_dir / "new_half.png", lambda p: new_half.save(p, format="PNG"))
+        atomic_write_with(step_dir / "canvas_before.png", lambda p: canvas.save(p, format="PNG"))
+        atomic_write_with(step_dir / "canvas_after.png", lambda p: canvas_next.save(p, format="PNG"))
+
+        # --- atomically advance authority ---
+        atomic_write_with(self.state.canvas_path, lambda p: canvas_next.save(p, format="PNG"))
+
+        self.state.canvas_width_px_expected = w1
+        self.state.canvas_height_px_expected = h1
+        self.state.step_index_current = step_index_next
+        atomic_write_text(self.state.state_path, json.dumps(self.state.to_dict(), indent=2, sort_keys=True) + "\n")
+
         atomic_write_text(step_dir / "committed.ok", "ok\n")
 
         return DiskStepResult("committed", self.state.session_id, step_index_next, (w0, h0), (w1, h1), str(step_dir))

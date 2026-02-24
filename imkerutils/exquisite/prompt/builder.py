@@ -10,9 +10,9 @@ from imkerutils.exquisite.prompt.templates import render_prompt
 @dataclass(frozen=True)
 class PromptPayload:
     """
-    Deterministic prompt payload for Phase C3.
+    Deterministic prompt payload.
 
-    - full_prompt: the exact string to send to the generator
+    - full_prompt: exact string to send to the generator
     - sha256_hex: content hash of full_prompt (utf-8) for step metadata / recovery
     """
     full_prompt: str
@@ -24,7 +24,7 @@ def _normalize_user_prompt(user_prompt: str) -> str:
     Determinism policy:
     - Normalize Windows newlines to '\n'
     - Strip leading/trailing whitespace
-    - Keep internal whitespace as-is (do NOT collapse) to avoid surprising the user
+    - Keep internal whitespace as-is (do NOT collapse)
     """
     return user_prompt.replace("\r\n", "\n").strip()
 
@@ -36,13 +36,6 @@ def build_prompt_payload(
     style_lock: str | None = None,
     negative: str | None = None,
 ) -> PromptPayload:
-    """
-    The single authoritative prompt builder.
-
-    Given (mode, user_prompt, optional style_lock/negative), produce:
-    - deterministic full prompt string
-    - deterministic sha256 hash of the prompt string
-    """
     normalized_user = _normalize_user_prompt(user_prompt)
 
     full = render_prompt(
