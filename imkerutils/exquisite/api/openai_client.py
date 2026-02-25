@@ -70,7 +70,19 @@ class OpenAITileGeneratorClient(TileGeneratorClient):
                 raise GeneratorPermanentError(f"conditioning_band must be {TILE_PX}x{BAND_PX}")
 
         # Build reference tile + mask so the model sees the conditioning pixels.
-        ref = build_reference_tile_and_mask(conditioning_band=conditioning_band, mode=mode)
+        ref = build_reference_tile_and_mask(
+            conditioning_band=conditioning_band,
+            mode=mode,
+
+            # --- seam aids ON ---
+            continuation_cue=True,
+            cue_px=2,
+            cue_rgb=(64, 64, 64),
+
+            scaffold_fill=True,
+            scaffold_downsample=16,
+            scaffold_blur_radius=4.0,
+        )
         ref_bytes = encode_png_bytes(ref.reference_tile_rgb)
         mask_bytes = encode_png_bytes(ref.mask_rgba)
 

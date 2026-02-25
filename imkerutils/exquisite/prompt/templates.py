@@ -140,6 +140,12 @@ Style continuation requirements:
 - Match the style already present in the given image (whatever it is).
 - Match line weight / texture / detail density / lighting logic / palette (if any).
 - Continue patterns, edges, and objects across the seam without discontinuity.
+
+Global tone preservation requirements:
+- Maintain the same overall brightness and exposure as the conditioning region.
+- Do not darken or fade the background.
+- Do not introduce vignetting, shading falloff, or gradual darkening.
+- Match the average luminance of the conditioning band.
 """
 
 

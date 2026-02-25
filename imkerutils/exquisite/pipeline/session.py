@@ -23,6 +23,7 @@ from imkerutils.exquisite.geometry.tile_mode import (
     split_tile,
     glue,
     expected_next_canvas_size,
+    _tile_patch_for_overlap_glue,
 )
 from imkerutils.exquisite.io.atomic_write import atomic_write_text, atomic_write_with
 from imkerutils.exquisite.state.session_state import SessionState
@@ -481,6 +482,9 @@ class ExquisiteSession:
         )
 
         cond_half, new_half = split_tile(tile_best, mode)
+        patch = _tile_patch_for_overlap_glue(tile_best, mode)
+        print("DEBUG_PATCH", "mode=", mode, "tile_patch.size=", patch.size)
+        atomic_write_with(step_dir / "tile_patch.png", lambda p: patch.save(p, format="PNG"))
         atomic_write_with(step_dir / "tile_full.png", lambda p: tile_best.save(p, format="PNG"))
         atomic_write_with(step_dir / "new_half.png", lambda p: new_half.save(p, format="PNG"))
 
@@ -637,6 +641,15 @@ class ExquisiteSession:
         )
 
         cond_half, new_half = split_tile(tile_best, mode)
+
+        # --- NEW: save the exact paste payload that glue() uses ---
+        patch = _tile_patch_for_overlap_glue(tile_best, mode)
+        print("DEBUG_PATCH", "mode=", mode, "tile_patch.size=", patch.size)
+        atomic_write_with(step_dir / "tile_patch.png", lambda p: patch.save(p, format="PNG"))
+
+        # --- Optional but highly useful: save cond_half too ---
+        atomic_write_with(step_dir / "cond_half.png", lambda p: cond_half.save(p, format="PNG"))
+
         atomic_write_with(step_dir / "tile_full.png", lambda p: tile_best.save(p, format="PNG"))
         atomic_write_with(step_dir / "new_half.png", lambda p: new_half.save(p, format="PNG"))
 

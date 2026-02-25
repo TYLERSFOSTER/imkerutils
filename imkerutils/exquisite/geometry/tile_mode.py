@@ -17,13 +17,19 @@ HALF_PX = 512
 # Conditioning band thickness (what we extract from the current canvas frontier).
 BAND_PX = 512
 
-# Overlap/advance contract:
+# Overlap/advance contract (YOUR WHITE-DIAGRAM CONTRACT):
 # - we overwrite OVERLAP_PX of existing canvas frontier
 # - we advance (net growth) by ADVANCE_PX per step
+#
+# With BAND_PX=512 and OVERLAP_PX=256, the "trimmed extension" we splice back in
+# has thickness (1024 - 256) = 768 along the extension axis:
+#   [overlap 256 (conditioning-side)] + [advance 512 (generated-side)]
 OVERLAP_PX = 256
-ADVANCE_PX = BAND_PX - OVERLAP_PX  # 256
+ADVANCE_PX = 512  # each step grows by 512
 
-# Backward-compatible name: ext_px now means "advance per step".
+PATCH_PX = OVERLAP_PX + ADVANCE_PX  # 768
+
+# Backward-compatible name: ext_px means "advance per step".
 EXT_PX = ADVANCE_PX
 
 
@@ -34,6 +40,7 @@ class TileModeSpec:
     band_px: int = BAND_PX
     overlap_px: int = OVERLAP_PX
     advance_px: int = ADVANCE_PX
+    patch_px: int = PATCH_PX
 
 
 def _require_rgb(img: Image.Image) -> Image.Image:
@@ -105,18 +112,18 @@ def split_tile(tile: Image.Image, mode: ExtendMode) -> Tuple[Image.Image, Image.
         return cond, new
 
     if mode == "x_rtl":
-        new = tile.crop((0, 0, HALF_PX, TILE_PX))          # left half
-        cond = tile.crop((HALF_PX, 0, TILE_PX, TILE_PX))   # right half
+        new = tile.crop((0, 0, HALF_PX, TILE_PX))           # left half
+        cond = tile.crop((HALF_PX, 0, TILE_PX, TILE_PX))    # right half
         return cond, new
 
     if mode == "y_ttb":
-        cond = tile.crop((0, 0, TILE_PX, HALF_PX))         # top half
-        new = tile.crop((0, HALF_PX, TILE_PX, TILE_PX))    # bottom half
+        cond = tile.crop((0, 0, TILE_PX, HALF_PX))          # top half
+        new = tile.crop((0, HALF_PX, TILE_PX, TILE_PX))     # bottom half
         return cond, new
 
     if mode == "y_btt":
-        new = tile.crop((0, 0, TILE_PX, HALF_PX))          # top half
-        cond = tile.crop((0, HALF_PX, TILE_PX, TILE_PX))   # bottom half
+        new = tile.crop((0, 0, TILE_PX, HALF_PX))           # top half
+        cond = tile.crop((0, HALF_PX, TILE_PX, TILE_PX))    # bottom half
         return cond, new
 
     raise ValueError(f"Unknown mode: {mode}")
@@ -124,37 +131,33 @@ def split_tile(tile: Image.Image, mode: ExtendMode) -> Tuple[Image.Image, Image.
 
 def _tile_patch_for_overlap_glue(tile: Image.Image, mode: ExtendMode) -> Image.Image:
     """
-    This returns the 512px-thick patch we paste into the output.
+    Returns the "trimmed extension" patch to paste into the output canvas.
 
-    IMPORTANT (Case A semantics):
-      - advance is +256 per step
-      - we overwrite the last 256 of the existing frontier
-      - therefore we paste a 512-wide (or 512-tall) patch that straddles the seam:
-            [conditioning-side overlap 256] + [generated-side advance 256]
-
-    With current reference-tile conventions, the seam is always at HALF_PX=512 in tile-space.
-    The correct “straddle window” is always:
-        [HALF_PX-OVERLAP_PX, HALF_PX+ADVANCE_PX] = [256, 768]
-    along the extension axis.
-
-    That is TRUE for all modes given the chosen half-placement conventions.
+    WHITE-DIAGRAM CONTRACT:
+      start = HALF_PX - OVERLAP_PX = 256
+      end   = HALF_PX + ADVANCE_PX = 1024
+      width = 768 = OVERLAP(256) + ADVANCE(512)
     """
     tile = _require_rgb(tile)
     if tile.size != (TILE_PX, TILE_PX):
         raise ValueError(f"Tile must be {TILE_PX}x{TILE_PX}, got {tile.size}")
 
-    a = HALF_PX - OVERLAP_PX      # 256
-    b = HALF_PX + ADVANCE_PX      # 768
+    a = HALF_PX - OVERLAP_PX              # 256
+    b = HALF_PX + ADVANCE_PX              # 1024
+    if b != TILE_PX:
+        raise AssertionError(f"Unexpected patch end b={b} (expected {TILE_PX})")
 
     if mode in ("x_ltr", "x_rtl"):
-        patch = tile.crop((a, 0, b, TILE_PX))  # 512x1024
-        if patch.size != (BAND_PX, TILE_PX):
+        patch = tile.crop((a, 0, b, TILE_PX))  # 768x1024
+        print("PATCH_CROP", "mode=", mode, "a=", a, "b=", b, "patch.size=", patch.size)
+        if patch.size != (PATCH_PX, TILE_PX):
             raise AssertionError(f"Patch size mismatch: {patch.size}")
         return patch
 
     if mode in ("y_ttb", "y_btt"):
-        patch = tile.crop((0, a, TILE_PX, b))  # 1024x512
-        if patch.size != (TILE_PX, BAND_PX):
+        patch = tile.crop((0, a, TILE_PX, b))  # 1024x768
+        print("PATCH_CROP", "mode=", mode, "a=", a, "b=", b, "patch.size=", patch.size)
+        if patch.size != (TILE_PX, PATCH_PX):
             raise AssertionError(f"Patch size mismatch: {patch.size}")
         return patch
 
@@ -163,51 +166,86 @@ def _tile_patch_for_overlap_glue(tile: Image.Image, mode: ExtendMode) -> Image.I
 
 def glue(canvas: Image.Image, tile: Image.Image, mode: ExtendMode) -> Image.Image:
     """
-    GLUE CONTRACT (Case A):
+    GLUE CONTRACT (WHITE-DIAGRAM CONTRACT):
 
-    x_ltr:
-      A_left = A[:, :w-ADVANCE]
-      patch  = tile[:, 256:768]
-      out    = cat(A_left, patch)   (implemented via paste onto a new canvas)
+    x_ltr (grow RIGHT by +512):
+      paste 768px patch at x = w - 256  (ends at w + 512)
 
-    x_rtl:
-      out width grows by ADVANCE on the left, so old content shifts right by ADVANCE.
-      patch is still tile[:, 256:768], pasted at x=0:
-        - patch[:, 256:512] overlaps old frontier (after shift)
-        - patch[:, 0:256] is new pixels beyond frontier
+    x_rtl (grow LEFT by +512):
+      shift old right by 512 then paste 768px patch at x = 0
 
-    y_ttb / y_btt analogous in Y.
+    y modes analogous.
     """
     canvas = _require_rgb(canvas)
     tile = _require_rgb(tile)
     w, h = canvas.size
 
+    print(
+        "GLUE",
+        "mode=", mode,
+        "canvas=", canvas.size,
+        "tile=", tile.size,
+        "OVERLAP=", OVERLAP_PX,
+        "ADVANCE=", ADVANCE_PX,
+        "PATCH=", PATCH_PX,
+    )
+
     if mode in ("x_ltr", "x_rtl"):
         if h != TILE_PX:
             raise ValueError(f"Phase A requires canvas height == {TILE_PX}, got {h}")
 
-        patch = _tile_patch_for_overlap_glue(tile, mode)  # 512x1024
+        patch = _tile_patch_for_overlap_glue(tile, mode)  # 768x1024
         out = Image.new("RGB", (w + ADVANCE_PX, h))
 
         if mode == "x_ltr":
+            paste_x = w - OVERLAP_PX
+            print(
+                "GLUE_PASTE",
+                "mode=x_ltr",
+                "paste_x=", paste_x,
+                "patch_end_x=", paste_x + patch.size[0],
+                "out_w=", out.size[0],
+            )
             out.paste(canvas, (0, 0))
-            out.paste(patch, (w - OVERLAP_PX, 0))  # overwrite last 256 and append 256
+            out.paste(patch, (paste_x, 0))
         else:
-            out.paste(canvas, (ADVANCE_PX, 0))     # shift old right
-            out.paste(patch, (0, 0))               # new left + overlap onto shifted old
+            print(
+                "GLUE_PASTE",
+                "mode=x_rtl",
+                "shift_old_x=", ADVANCE_PX,
+                "patch_end_x=", patch.size[0],
+                "out_w=", out.size[0],
+            )
+            out.paste(canvas, (ADVANCE_PX, 0))
+            out.paste(patch, (0, 0))
         return out
 
     if mode in ("y_ttb", "y_btt"):
         if w != TILE_PX:
             raise ValueError(f"Phase A requires canvas width == {TILE_PX}, got {w}")
 
-        patch = _tile_patch_for_overlap_glue(tile, mode)  # 1024x512
+        patch = _tile_patch_for_overlap_glue(tile, mode)  # 1024x768
         out = Image.new("RGB", (w, h + ADVANCE_PX))
 
         if mode == "y_ttb":
+            paste_y = h - OVERLAP_PX
+            print(
+                "GLUE_PASTE",
+                "mode=y_ttb",
+                "paste_y=", paste_y,
+                "patch_end_y=", paste_y + patch.size[1],
+                "out_h=", out.size[1],
+            )
             out.paste(canvas, (0, 0))
-            out.paste(patch, (0, h - OVERLAP_PX))
+            out.paste(patch, (0, paste_y))
         else:
+            print(
+                "GLUE_PASTE",
+                "mode=y_btt",
+                "shift_old_y=", ADVANCE_PX,
+                "patch_end_y=", patch.size[1],
+                "out_h=", out.size[1],
+            )
             out.paste(canvas, (0, ADVANCE_PX))
             out.paste(patch, (0, 0))
         return out
