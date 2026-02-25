@@ -83,6 +83,7 @@ class OpenAITileGeneratorClient(TileGeneratorClient):
         payload = build_prompt_payload(mode=mode, user_prompt=prompt)
 
         try:
+            print("\n=== FULL PROMPT SENT TO OPENAI ===\n", payload.full_prompt, "\n===============================\n")
             edits_fn = getattr(self._client.images, "edits", None)
             if edits_fn is None:
                 edits_fn = getattr(self._client.images, "edit", None)

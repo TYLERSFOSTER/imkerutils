@@ -1,22 +1,25 @@
+# imkerutils/exquisite/ui/__main__.py
 from __future__ import annotations
 
-import sys
+import argparse
 from pathlib import Path
 
 from imkerutils.exquisite.ui.server import run_server
 
 
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: python -m imkerutils.exquisite.ui <initial_canvas.png>")
-        sys.exit(1)
+def main() -> None:
+    p = argparse.ArgumentParser(prog="python -m imkerutils.exquisite.ui")
+    p.add_argument("initial_canvas", type=str, help="Path to initial 1024x1024 image (PNG recommended).")
+    p.add_argument("--mode", type=str, default="x_ltr", choices=["x_ltr", "x_rtl", "y_ttb", "y_btt"])
+    p.add_argument("--host", type=str, default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8000)
+    args = p.parse_args()
 
-    initial = Path(sys.argv[1])
+    initial = Path(args.initial_canvas).expanduser().resolve()
     if not initial.exists():
-        print("Initial canvas not found.")
-        sys.exit(1)
+        raise SystemExit("Initial canvas not found.")
 
-    run_server(initial)
+    run_server(initial_canvas=initial, mode=args.mode, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

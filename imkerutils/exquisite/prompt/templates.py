@@ -3,13 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from imkerutils.exquisite.geometry.tile_mode import ExtendMode
+from imkerutils.exquisite.geometry.tile_mode import ExtendMode, OVERLAP_PX, ADVANCE_PX, HALF_PX, TILE_PX
 
 
 @dataclass(frozen=True)
 class PlacementConvention:
     """
-    Kept for compatibility / potential UI display, but NOT used to instruct the model.
+    Kept for compatibility / potential UI display.
     """
     mode: ExtendMode
     conditioning_where: str
@@ -58,13 +58,74 @@ def _direction_word(mode: ExtendMode) -> str:
     raise ValueError(f"Unknown mode: {mode}")
 
 
+def _overlap_contract_block(mode: ExtendMode) -> str:
+    """
+    A deterministic, overlap-aware instruction block that matches our glue contract.
+
+    Key idea:
+    - The model receives a 1024x1024 reference image where ONE HALF is context (preserved)
+      and ONE HALF is to be regenerated.
+    - Downstream glue keeps only a band around the seam:
+        * last OVERLAP_PX of the context side are overwritten,
+        * first ADVANCE_PX of the generated side become the net new growth.
+    - Therefore: the highest-value continuity target is the generated strip adjacent to the seam.
+    """
+    # These are "human-readable coordinates" only; they must remain stable.
+    # We do NOT promise pixel-perfect outcomes beyond what masking enforces.
+    if mode == "x_ltr":
+        seam = f"vertical seam at column {HALF_PX}"
+        gen_strip = f"first {OVERLAP_PX}px of the generated side (columns {HALF_PX}..{HALF_PX + OVERLAP_PX - 1})"
+        return (
+            "Overlap-aware seam contract (IMPORTANT):\n"
+            f"- The LEFT half (columns 0..{HALF_PX - 1}) is context; the RIGHT half (columns {HALF_PX}..{TILE_PX - 1}) is generated.\n"
+            f"- Treat the {seam} as the seam boundary.\n"
+            f"- Continuity priority: make the {gen_strip} continue edges/lines/texture from immediately left of the seam.\n"
+            f"- Do NOT introduce a visible vertical boundary; any line/object that reaches the seam should continue into that first {OVERLAP_PX}px of generated area.\n"
+        )
+
+    if mode == "x_rtl":
+        seam = f"vertical seam at column {HALF_PX}"
+        gen_strip = f"last {OVERLAP_PX}px of the generated side (columns {HALF_PX - OVERLAP_PX}..{HALF_PX - 1})"
+        return (
+            "Overlap-aware seam contract (IMPORTANT):\n"
+            f"- The RIGHT half (columns {HALF_PX}..{TILE_PX - 1}) is context; the LEFT half (columns 0..{HALF_PX - 1}) is generated.\n"
+            f"- Treat the {seam} as the seam boundary.\n"
+            f"- Continuity priority: make the {gen_strip} continue edges/lines/texture from immediately right of the seam.\n"
+            f"- Do NOT introduce a visible vertical boundary; any line/object that reaches the seam should continue into that last {OVERLAP_PX}px of generated area.\n"
+        )
+
+    if mode == "y_ttb":
+        seam = f"horizontal seam at row {HALF_PX}"
+        gen_strip = f"first {OVERLAP_PX}px of the generated side (rows {HALF_PX}..{HALF_PX + OVERLAP_PX - 1})"
+        return (
+            "Overlap-aware seam contract (IMPORTANT):\n"
+            f"- The TOP half (rows 0..{HALF_PX - 1}) is context; the BOTTOM half (rows {HALF_PX}..{TILE_PX - 1}) is generated.\n"
+            f"- Treat the {seam} as the seam boundary.\n"
+            f"- Continuity priority: make the {gen_strip} continue edges/lines/texture from immediately above the seam.\n"
+            f"- Do NOT introduce a visible horizontal boundary; any line/object that reaches the seam should continue into that first {OVERLAP_PX}px of generated area.\n"
+        )
+
+    if mode == "y_btt":
+        seam = f"horizontal seam at row {HALF_PX}"
+        gen_strip = f"last {OVERLAP_PX}px of the generated side (rows {HALF_PX - OVERLAP_PX}..{HALF_PX - 1})"
+        return (
+            "Overlap-aware seam contract (IMPORTANT):\n"
+            f"- The BOTTOM half (rows {HALF_PX}..{TILE_PX - 1}) is context; the TOP half (rows 0..{HALF_PX - 1}) is generated.\n"
+            f"- Treat the {seam} as the seam boundary.\n"
+            f"- Continuity priority: make the {gen_strip} continue edges/lines/texture from immediately below the seam.\n"
+            f"- Do NOT introduce a visible horizontal boundary; any line/object that reaches the seam should continue into that last {OVERLAP_PX}px of generated area.\n"
+        )
+
+    raise ValueError(f"Unknown mode: {mode}")
+
+
 SYSTEM_PREAMBLE = """\
 You are given an image.
 
 Your task is to EXTEND this image seamlessly in the specified direction.
 
 Hard requirements:
-- Preserve all existing pixels exactly as they appear in the given image.
+- Preserve all existing pixels exactly as they appear in the given image (do not alter the context region).
 - Continue the scene naturally into the new area.
 - Do not redesign, restyle, re-render, reframe, zoom, rotate, or change perspective.
 - Do not "clean up" or "enhance" the existing region (no denoise/sharpen/smoothing).
@@ -102,10 +163,13 @@ def render_prompt(
     style = STYLE_LOCK_DEFAULT if style_lock is None else style_lock.strip() + "\n"
     neg = NEGATIVE_DEFAULT if negative is None else negative.strip() + "\n"
 
+    contract = _overlap_contract_block(mode)
+
     # Deterministic layout.
     return (
         f"{SYSTEM_PREAMBLE}\n"
         f"Direction: extend the image to the {direction}.\n\n"
+        f"{contract}\n"
         f"{style}\n"
         f"{neg}\n"
         f"User request:\n"
