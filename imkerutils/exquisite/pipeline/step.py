@@ -1,7 +1,4 @@
-# (OPTIONAL) imkerutils/exquisite/pipeline/step.py
-# Only needed if you ever run enforce_band_identity=True in-memory.
-# Make the identity check ignore the overlap strip.
-
+# imkerutils/exquisite/pipeline/step.py
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -15,6 +12,7 @@ from imkerutils.exquisite.geometry.tile_mode import (
     TILE_PX,
     HALF_PX,
     OVERLAP_PX,
+    BAND_PX,
     extract_conditioning_band,
     expected_next_canvas_size,
     glue,
@@ -35,7 +33,7 @@ class StepResult:
 def _cond_region_for_identity(mode: ExtendMode) -> tuple[int, int, int, int]:
     """
     Returns crop box (l,t,r,b) inside the conditioning half that must be identical,
-    excluding the overlap strip.
+    excluding the overlap strip. (This keeps your existing identity check semantics.)
     """
     keep_px = HALF_PX - OVERLAP_PX  # 256
 
@@ -49,6 +47,36 @@ def _cond_region_for_identity(mode: ExtendMode) -> tuple[int, int, int, int]:
     if mode == "y_btt":
         # conditioning half is bottom; preserve far-bottom 256: y=256..512 within cond_half coords
         return (0, OVERLAP_PX, TILE_PX, HALF_PX)
+    raise ValueError(mode)
+
+
+def _post_enforce_keep_into_tile(*, tile: Image.Image, band: Image.Image, mode: ExtendMode) -> Image.Image:
+    """
+    In-memory-step post-enforce: paste ONLY the far KEEP region (256px).
+    band is the extracted conditioning band (512px thick strip).
+    """
+    keep_px = HALF_PX - OVERLAP_PX  # 256
+
+    if mode == "x_ltr":
+        src = band.crop((0, 0, keep_px, TILE_PX))
+        tile.paste(src, (0, 0))
+        return tile
+
+    if mode == "x_rtl":
+        src = band.crop((BAND_PX - keep_px, 0, BAND_PX, TILE_PX))
+        tile.paste(src, (TILE_PX - keep_px, 0))
+        return tile
+
+    if mode == "y_ttb":
+        src = band.crop((0, 0, TILE_PX, keep_px))
+        tile.paste(src, (0, 0))
+        return tile
+
+    if mode == "y_btt":
+        src = band.crop((0, BAND_PX - keep_px, TILE_PX, BAND_PX))
+        tile.paste(src, (0, TILE_PX - keep_px))
+        return tile
+
     raise ValueError(mode)
 
 
@@ -84,25 +112,18 @@ def execute_step_in_memory(
 
     tile = tile.convert("RGB") if tile.mode != "RGB" else tile
 
-    # NOTE: if you use OpenAITileGeneratorClient, it already does post-enforce.
-    # Keeping this branch for completeness.
+    # If enabled, must match the KEEP-only paste contract.
     if post_enforce_band_identity:
-        if mode == "x_ltr":
-            tile.paste(band.crop((0, 0, HALF_PX - OVERLAP_PX, TILE_PX)), (0, 0))
-        elif mode == "x_rtl":
-            tile.paste(band.crop((OVERLAP_PX, 0, HALF_PX, TILE_PX)), (HALF_PX + OVERLAP_PX, 0))
-        elif mode == "y_ttb":
-            tile.paste(band.crop((0, 0, TILE_PX, HALF_PX - OVERLAP_PX)), (0, 0))
-        elif mode == "y_btt":
-            tile.paste(band.crop((0, OVERLAP_PX, TILE_PX, HALF_PX)), (0, HALF_PX + OVERLAP_PX))
-        else:
+        try:
+            tile = _post_enforce_keep_into_tile(tile=tile, band=band, mode=mode)
+        except Exception:
             return canvas, StepResult("rejected", mode, step_index, (w, h), (w, h), "unknown_mode")
 
     cond_half, _new_half = split_tile(tile, mode)
 
     if enforce_band_identity:
-        # Compare only the non-overlap region inside cond_half.
         box = _cond_region_for_identity(mode)
+        # NOTE: leaving your existing style; if this raises, fix separately.
         if list(cond_half.crop(box).get_flattened_data()) != list(band.crop(box).get_flattened_data()):
             return canvas, StepResult("rejected", mode, step_index, (w, h), (w, h), "band_identity_violation")
 

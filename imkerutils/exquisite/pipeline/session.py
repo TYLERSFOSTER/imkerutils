@@ -115,28 +115,12 @@ def _extract_scoring_strips(
 
 
 def _edge_weight_vector(mode: ExtendMode, length: int) -> list[float]:
-    """
-    Weights along the axis normal to the seam.
-    Highest weight at the seam boundary, decays into the strip.
-
-    For the strips produced by _extract_scoring_strips():
-      - x_ltr: seam is LEFT edge of tile_strip, RIGHT edge of canvas_strip
-      - x_rtl: seam is RIGHT edge of tile_strip, LEFT edge of canvas_strip
-      - y_ttb: seam is TOP edge of tile_strip, BOTTOM edge of canvas_strip
-      - y_btt: seam is BOTTOM edge of tile_strip, TOP edge of canvas_strip
-
-    We encode this by choosing “seam is at start” vs “seam is at end”
-    depending on mode, for both x and y cases.
-    """
     if length <= 1:
         return [1.0] * length
 
     hi = 1.0
     lo = 0.2
 
-    # For the *tile generated strip*:
-    # x_ltr / y_ttb seam is at START of tile strip (index 0).
-    # x_rtl / y_btt seam is at END of tile strip (index length-1).
     if mode in ("x_ltr", "y_ttb"):
         return [hi - (hi - lo) * (i / (length - 1)) for i in range(length)]
     if mode in ("x_rtl", "y_btt"):
@@ -145,10 +129,6 @@ def _edge_weight_vector(mode: ExtendMode, length: int) -> list[float]:
 
 
 def _edge_map_find_edges(img_rgb: Image.Image) -> Image.Image:
-    """
-    Cheap, stable edge proxy using Pillow's FIND_EDGES.
-    Returns 'L'.
-    """
     g = img_rgb.convert("L")
     e = g.filter(ImageFilter.FIND_EDGES)
     return e
@@ -160,10 +140,6 @@ def _edge_weighted_edge_mse_score(
     tile_strip_rgb: Image.Image,
     mode: ExtendMode,
 ) -> float:
-    """
-    Higher is better (return negative weighted MSE on edge maps).
-    Pure-Pillow implementation (no numpy dependency).
-    """
     if canvas_strip_rgb.size != tile_strip_rgb.size:
         raise ValueError(f"strip mismatch: {canvas_strip_rgb.size} vs {tile_strip_rgb.size}")
 
@@ -174,8 +150,6 @@ def _edge_weighted_edge_mse_score(
     p0 = list(e0.getdata())
     p1 = list(e1.getdata())
 
-    # weight along the axis normal to seam:
-    # for x modes: weight over x; for y modes: weight over y.
     if mode in ("x_ltr", "x_rtl"):
         weights = _edge_weight_vector(mode, w)
         denom = 0.0
@@ -211,16 +185,6 @@ def _overlap_crops_for_blend(
     tile_rgb: Image.Image,
     mode: ExtendMode,
 ) -> tuple[Image.Image, Image.Image]:
-    """
-    Crops for blending INSIDE the overlap that glue() overwrites (not the generated strip).
-
-    This is the 256px region that must match existing canvas frontier.
-
-    x_ltr: canvas w-256:w  vs tile 256:512
-    x_rtl: canvas 0:256    vs tile 512:768
-    y_ttb: canvas h-256:h  vs tile 256:512
-    y_btt: canvas 0:256    vs tile 512:768
-    """
     canvas_rgb = canvas_rgb.convert("RGB")
     tile_rgb = tile_rgb.convert("RGB")
     cw, ch = canvas_rgb.size
@@ -255,10 +219,6 @@ def _glue_with_feather(
     mode: ExtendMode,
     feather_px: int,
 ) -> Image.Image:
-    """
-    Feather-blend ONLY inside the 256px overlap region (optional).
-    This hides micro-discontinuities while preserving the hard conditioning invariant.
-    """
     if feather_px <= 0:
         return glue(canvas, tile, mode)
 
@@ -271,7 +231,6 @@ def _glue_with_feather(
     canvas_ov, tile_ov = _overlap_crops_for_blend(canvas_rgb=canvas, tile_rgb=tile, mode=mode)
     ov_w, ov_h = canvas_ov.size
 
-    # alpha mask: 0 uses canvas, 255 uses tile
     if mode in ("x_ltr", "x_rtl"):
         mask = Image.new("L", (ov_w, ov_h), 0)
         ramp = Image.new("L", (feather_px, ov_h), 0)
@@ -283,12 +242,9 @@ def _glue_with_feather(
         ramp.putdata(ramp_pixels)
 
         if mode == "x_ltr":
-            # feather at frontier side = RIGHT end of overlap window
             mask.paste(ramp, (ov_w - feather_px, 0))
         else:
-            # x_rtl: frontier side = LEFT end of overlap window
             mask.paste(ramp, (0, 0))
-
     else:
         mask = Image.new("L", (ov_w, ov_h), 0)
         ramp = Image.new("L", (ov_w, feather_px), 0)
@@ -300,10 +256,8 @@ def _glue_with_feather(
         ramp.putdata(ramp_pixels)
 
         if mode == "y_ttb":
-            # feather at frontier side = BOTTOM end of overlap window
             mask.paste(ramp, (0, ov_h - feather_px))
         else:
-            # y_btt: frontier side = TOP end of overlap window
             mask.paste(ramp, (0, 0))
 
     blended_ov = Image.composite(tile_ov, canvas_ov, mask)
@@ -321,6 +275,33 @@ def _glue_with_feather(
         raise ValueError(mode)
 
     return glue(canvas, tile2, mode)
+
+
+def _post_enforce_keep_into_tile(*, tile: Image.Image, band: Image.Image, mode: ExtendMode) -> Image.Image:
+    """
+    Session-side post-enforce to match OpenAITileGeneratorClient:
+    paste ONLY the far KEEP region (256px), not the full band.
+    """
+    keep_px = HALF_PX - OVERLAP_PX  # 256
+
+    if mode == "x_ltr":
+        src = band.crop((0, 0, keep_px, TILE_PX))
+        tile.paste(src, (0, 0))
+        return tile
+    if mode == "x_rtl":
+        src = band.crop((BAND_PX - keep_px, 0, BAND_PX, TILE_PX))
+        tile.paste(src, (TILE_PX - keep_px, 0))
+        return tile
+    if mode == "y_ttb":
+        src = band.crop((0, 0, TILE_PX, keep_px))
+        tile.paste(src, (0, 0))
+        return tile
+    if mode == "y_btt":
+        src = band.crop((0, BAND_PX - keep_px, TILE_PX, BAND_PX))
+        tile.paste(src, (0, TILE_PX - keep_px))
+        return tile
+
+    raise ValueError(mode)
 
 
 class ExquisiteSession:
@@ -538,6 +519,12 @@ class ExquisiteSession:
                     prompt=prompt,
                     step_index=(step_index_next * 1000) + k,
                 )
+                raw_dir = step_dir / "candidates_raw"
+                raw_dir.mkdir(parents=True, exist_ok=True)
+                atomic_write_with(
+                    raw_dir / f"{k:02d}_tile_raw.png",
+                    lambda p, _t=tile.copy(): _t.save(p, format="PNG"),
+                )
             except GeneratorError as e:
                 candidates.append(Image.new("RGB", (TILE_PX, TILE_PX), (0, 0, 0)))
                 scores.append(float("-inf"))
@@ -557,16 +544,12 @@ class ExquisiteSession:
                 errors.append(f"BadTileSize: {tile.size}")
                 continue
 
+            # IMPORTANT: if you want this knob ON, it must match the client’s “KEEP-only” paste,
+            # not a full-band paste.
             if post_enforce_band_identity:
-                if mode == "x_ltr":
-                    tile.paste(band, (0, 0))
-                elif mode == "x_rtl":
-                    tile.paste(band, (512, 0))
-                elif mode == "y_ttb":
-                    tile.paste(band, (0, 0))
-                elif mode == "y_btt":
-                    tile.paste(band, (0, 512))
-                else:
+                try:
+                    tile = _post_enforce_keep_into_tile(tile=tile, band=band, mode=mode)
+                except Exception:
                     candidates.append(tile)
                     scores.append(float("-inf"))
                     errors.append(f"UnknownMode: {mode}")
@@ -642,12 +625,10 @@ class ExquisiteSession:
 
         cond_half, new_half = split_tile(tile_best, mode)
 
-        # --- NEW: save the exact paste payload that glue() uses ---
         patch = _tile_patch_for_overlap_glue(tile_best, mode)
         print("DEBUG_PATCH", "mode=", mode, "tile_patch.size=", patch.size)
         atomic_write_with(step_dir / "tile_patch.png", lambda p: patch.save(p, format="PNG"))
 
-        # --- Optional but highly useful: save cond_half too ---
         atomic_write_with(step_dir / "cond_half.png", lambda p: cond_half.save(p, format="PNG"))
 
         atomic_write_with(step_dir / "tile_full.png", lambda p: tile_best.save(p, format="PNG"))

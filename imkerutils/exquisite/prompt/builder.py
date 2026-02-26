@@ -1,3 +1,4 @@
+# imkerutils/exquisite/prompt/builder.py
 from __future__ import annotations
 
 import hashlib
@@ -20,12 +21,7 @@ class PromptPayload:
 
 
 def _normalize_user_prompt(user_prompt: str) -> str:
-    """
-    Determinism policy:
-    - Normalize Windows newlines to '\n'
-    - Strip leading/trailing whitespace
-    - Keep internal whitespace as-is (do NOT collapse)
-    """
+    # Keep existing determinism policy.
     return user_prompt.replace("\r\n", "\n").strip()
 
 

@@ -1,3 +1,4 @@
+# imkerutils/exquisite/api/openai_client.py
 from __future__ import annotations
 
 import base64
@@ -10,17 +11,19 @@ from openai import OpenAI
 
 from imkerutils.exquisite.api.client import (
     TileGeneratorClient,
-    GeneratorTransientError,
     GeneratorPermanentError,
-    GeneratorSafetyRefusal,
-    GeneratorBillingLimitError,
 )
-from imkerutils.exquisite.geometry.tile_mode import ExtendMode, TILE_PX, BAND_PX
-from imkerutils.exquisite.geometry.reference_tile import (
-    build_reference_tile_and_mask,
-    encode_png_bytes,
+
+from imkerutils.exquisite.geometry.tile_mode import (
+    ExtendMode,
+    TILE_PX,
+    BAND_PX,
+    HALF_PX,
+    OVERLAP_PX,
 )
-from imkerutils.exquisite.prompt.builder import build_prompt_payload
+
+from imkerutils.exquisite.geometry.reference_tile import encode_png_bytes
+
 
 MODEL_DEFAULT = "gpt-image-1"
 
@@ -29,11 +32,17 @@ MODEL_DEFAULT = "gpt-image-1"
 class OpenAITileGeneratorConfig:
     model: str = MODEL_DEFAULT
     timeout_s: float | None = None
+    input_fidelity: str | None = "high"  # try to preserve given pixels
 
 
 class OpenAITileGeneratorClient(TileGeneratorClient):
     """
-    Real OpenAI-backed generator client (image-conditioned).
+    Mask-free generator adapter.
+
+    Contract intent (x_ltr case):
+      - Send ONLY the 512px frontier band (512x1024) as the image input.
+      - Ask the model to extend it to a 1024x1024 tile.
+      - LEFT half is context; RIGHT half is new.
     """
 
     def __init__(
@@ -42,9 +51,7 @@ class OpenAITileGeneratorClient(TileGeneratorClient):
         api_key: str | None = None,
         config: OpenAITileGeneratorConfig | None = None,
     ) -> None:
-        if api_key is None:
-            api_key = os.environ.get("OPENAI_API_KEY")
-
+        api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if not api_key:
             raise GeneratorPermanentError("OPENAI_API_KEY not set")
 
@@ -56,108 +63,86 @@ class OpenAITileGeneratorClient(TileGeneratorClient):
         *,
         conditioning_band: Image.Image,
         mode: ExtendMode,
-        prompt: str,          # NOTE: treat as RAW USER PROMPT TEXT
+        prompt: str,
         step_index: int,
     ) -> Image.Image:
-        conditioning_band = conditioning_band.convert("RGB")
+        band = conditioning_band.convert("RGB")
 
-        # validate conditioning band size
+        # Sanity: band dimensions must match your tile_mode contract.
         if mode in ("x_ltr", "x_rtl"):
-            if conditioning_band.size != (BAND_PX, TILE_PX):
-                raise GeneratorPermanentError(f"conditioning_band must be {BAND_PX}x{TILE_PX}")
+            if band.size != (BAND_PX, TILE_PX):
+                raise GeneratorPermanentError(f"conditioning_band wrong size: got {band.size}, expected {(BAND_PX, TILE_PX)}")
         else:
-            if conditioning_band.size != (TILE_PX, BAND_PX):
-                raise GeneratorPermanentError(f"conditioning_band must be {TILE_PX}x{BAND_PX}")
+            if band.size != (TILE_PX, BAND_PX):
+                raise GeneratorPermanentError(f"conditioning_band wrong size: got {band.size}, expected {(TILE_PX, BAND_PX)}")
 
-        # Build reference tile + mask so the model sees the conditioning pixels.
-        ref = build_reference_tile_and_mask(
-            conditioning_band=conditioning_band,
-            mode=mode,
+        band_file = io.BytesIO(encode_png_bytes(band))
+        band_file.name = f"band_step_{step_index}.png"
 
-            # --- seam aids ON ---
-            continuation_cue=True,
-            cue_px=2,
-            cue_rgb=(64, 64, 64),
+        simple_prompt = _build_simple_prompt(mode=mode, user_prompt=prompt)
 
-            scaffold_fill=True,
-            scaffold_downsample=16,
-            scaffold_blur_radius=4.0,
+        # Mask intentionally omitted.
+        kwargs: dict = {}
+        if self._config.input_fidelity is not None:
+            kwargs["input_fidelity"] = self._config.input_fidelity
+
+        result = self._client.images.edit(
+            model=self._config.model,
+            image=[band_file],
+            prompt=simple_prompt,
+            size="1024x1024",
+            **kwargs,
         )
-        ref_bytes = encode_png_bytes(ref.reference_tile_rgb)
-        mask_bytes = encode_png_bytes(ref.mask_rgba)
 
-        ref_file = io.BytesIO(ref_bytes)
-        ref_file.name = f"ref_step_{step_index}.png"
-        mask_file = io.BytesIO(mask_bytes)
-        mask_file.name = f"mask_step_{step_index}.png"
-
-        # Expand user prompt into our deterministic “extend to RIGHT/LEFT/UP/DOWN” instruction.
-        payload = build_prompt_payload(mode=mode, user_prompt=prompt)
-
-        try:
-            print("\n=== FULL PROMPT SENT TO OPENAI ===\n", payload.full_prompt, "\n===============================\n")
-            edits_fn = getattr(self._client.images, "edits", None)
-            if edits_fn is None:
-                edits_fn = getattr(self._client.images, "edit", None)
-            if edits_fn is None:
-                raise GeneratorPermanentError("OpenAI SDK missing images.edits/images.edit method")
-
-            result = edits_fn(
-                model=self._config.model,
-                image=[ref_file],
-                mask=mask_file,
-                prompt=payload.full_prompt,
-                size="1024x1024",
-            )
-
-        except Exception as e:
-            msg = str(e).lower()
-
-            if (
-                "billing_hard_limit" in msg
-                or "billing hard limit" in msg
-                or "billing_hard_limit_reached" in msg
-            ):
-                raise GeneratorBillingLimitError(str(e)) from e
-
-            if "timeout" in msg or "rate limit" in msg:
-                raise GeneratorTransientError(str(e)) from e
-
-            if "safety" in msg or "policy" in msg:
-                raise GeneratorSafetyRefusal(str(e)) from e
-
-            raise GeneratorPermanentError(str(e)) from e
-
-        try:
-            image_base64 = result.data[0].b64_json
-            tile = Image.open(io.BytesIO(base64.b64decode(image_base64)))
-        except Exception as e:
-            raise GeneratorPermanentError("Invalid image response") from e
-
-        tile = tile.convert("RGB")
+        image_base64 = result.data[0].b64_json
+        tile = Image.open(io.BytesIO(base64.b64decode(image_base64))).convert("RGB")
 
         if tile.size != (TILE_PX, TILE_PX):
-            raise GeneratorPermanentError(f"Model returned wrong tile size {tile.size}")
+            raise GeneratorPermanentError(f"Bad tile size: {tile.size}")
 
-        # Hard invariant: enforce conditioning band identity strictly.
-        tile = self._post_enforce_conditioning_half(tile, conditioning_band, mode)
+        # Preserve the far KEEP region (256px) exactly (your existing behavior).
+        return self._post_enforce_conditioning_keep(tile, band, mode)
 
-        return tile
+    def _post_enforce_conditioning_keep(self, tile: Image.Image, band: Image.Image, mode: ExtendMode) -> Image.Image:
+        KEEP_PX = HALF_PX - OVERLAP_PX  # 256
 
-    def _post_enforce_conditioning_half(
-        self,
-        tile: Image.Image,
-        band: Image.Image,
-        mode: ExtendMode,
-    ) -> Image.Image:
         if mode == "x_ltr":
-            tile.paste(band, (0, 0))
+            tile.paste(band.crop((0, 0, KEEP_PX, TILE_PX)), (0, 0))
         elif mode == "x_rtl":
-            tile.paste(band, (512, 0))
+            tile.paste(band.crop((BAND_PX - KEEP_PX, 0, BAND_PX, TILE_PX)), (TILE_PX - KEEP_PX, 0))
         elif mode == "y_ttb":
-            tile.paste(band, (0, 0))
+            tile.paste(band.crop((0, 0, TILE_PX, KEEP_PX)), (0, 0))
         elif mode == "y_btt":
-            tile.paste(band, (0, 512))
+            tile.paste(band.crop((0, BAND_PX - KEEP_PX, TILE_PX, BAND_PX)), (0, TILE_PX - KEEP_PX))
         else:
             raise GeneratorPermanentError("Unknown mode")
+
         return tile
+
+
+def _build_simple_prompt(*, mode: ExtendMode, user_prompt: str) -> str:
+    # This is intentionally “front-end simple”, matching your known-good UI prompt style.
+    user_prompt = (user_prompt or "").strip()
+
+    if mode == "x_ltr":
+        return (
+            "Extend this image *continuously* to the right so that it becomes 1024x1024. "
+            f"In the new region, satisfy the prompt: {user_prompt}"
+        )
+    if mode == "x_rtl":
+        return (
+            "Extend this image *continuously* to the left so that it becomes 1024x1024. "
+            f"In the new region, satisfy the prompt: {user_prompt}"
+        )
+    if mode == "y_ttb":
+        return (
+            "Extend this image *continuously* downward so that it becomes 1024x1024. "
+            f"In the new region, satisfy the prompt: {user_prompt}"
+        )
+    if mode == "y_btt":
+        return (
+            "Extend this image *continuously* upward so that it becomes 1024x1024. "
+            f"In the new region, satisfy the prompt: {user_prompt}"
+        )
+
+    raise ValueError(f"Unknown mode: {mode}")
