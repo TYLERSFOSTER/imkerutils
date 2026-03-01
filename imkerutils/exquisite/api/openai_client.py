@@ -13,7 +13,6 @@ from imkerutils.exquisite.api.client import (
     TileGeneratorClient,
     GeneratorPermanentError,
 )
-
 from imkerutils.exquisite.geometry.tile_mode import (
     ExtendMode,
     TILE_PX,
@@ -21,11 +20,12 @@ from imkerutils.exquisite.geometry.tile_mode import (
     HALF_PX,
     OVERLAP_PX,
 )
+from imkerutils.exquisite.geometry.reference_tile import (
+    encode_png_bytes,
+    build_reference_tile_and_mask,
+)
 
-from imkerutils.exquisite.geometry.reference_tile import encode_png_bytes
-
-
-MODEL_DEFAULT = "gpt-image-1"
+MODEL_DEFAULT = "gpt-image-1.5"
 
 
 @dataclass(frozen=True)
@@ -37,12 +37,14 @@ class OpenAITileGeneratorConfig:
 
 class OpenAITileGeneratorClient(TileGeneratorClient):
     """
-    Mask-free generator adapter.
+    Convention B generator adapter.
 
-    Contract intent (x_ltr case):
-      - Send ONLY the 512px frontier band (512x1024) as the image input.
-      - Ask the model to extend it to a 1024x1024 tile.
-      - LEFT half is context; RIGHT half is new.
+    Contract intent:
+      - Build a 1024x1024 reference canvas containing the 512px frontier band.
+      - Provide a 1024x1024 RGBA mask with an alpha ramp over the band thickness:
+          opposite-frontier boundary: alpha=255 (fix)
+          frontier boundary:          alpha=0   (free)
+      - Ask the model to produce a 1024x1024 tile consistent with this edit mask.
     """
 
     def __init__(
@@ -68,27 +70,40 @@ class OpenAITileGeneratorClient(TileGeneratorClient):
     ) -> Image.Image:
         band = conditioning_band.convert("RGB")
 
-        # Sanity: band dimensions must match your tile_mode contract.
+        # Sanity: band dimensions must match tile_mode contract.
         if mode in ("x_ltr", "x_rtl"):
             if band.size != (BAND_PX, TILE_PX):
-                raise GeneratorPermanentError(f"conditioning_band wrong size: got {band.size}, expected {(BAND_PX, TILE_PX)}")
+                raise GeneratorPermanentError(
+                    f"conditioning_band wrong size: got {band.size}, expected {(BAND_PX, TILE_PX)}"
+                )
         else:
             if band.size != (TILE_PX, BAND_PX):
-                raise GeneratorPermanentError(f"conditioning_band wrong size: got {band.size}, expected {(TILE_PX, BAND_PX)}")
+                raise GeneratorPermanentError(
+                    f"conditioning_band wrong size: got {band.size}, expected {(TILE_PX, BAND_PX)}"
+                )
 
-        band_file = io.BytesIO(encode_png_bytes(band))
-        band_file.name = f"band_step_{step_index}.png"
+        # Build 1024x1024 reference canvas + 1024x1024 RGBA mask (Convention B).
+        ref_and_mask = build_reference_tile_and_mask(conditioning_band=band, mode=mode)
+        ref_rgb = ref_and_mask.reference_tile_rgb.convert("RGB")
+        mask_rgba = ref_and_mask.mask_rgba.convert("RGBA")
+
+        ref_file = io.BytesIO(encode_png_bytes(ref_rgb))
+        ref_file.name = f"ref_step_{step_index}.png"
+
+        mask_file = io.BytesIO(encode_png_bytes(mask_rgba))
+        mask_file.name = f"mask_step_{step_index}.png"
 
         simple_prompt = _build_simple_prompt(mode=mode, user_prompt=prompt)
+        print(f"OpenAI API prompt for step {step_index}:\n{simple_prompt}\n---END PROMPT---\n")
 
-        # Mask intentionally omitted.
         kwargs: dict = {}
         if self._config.input_fidelity is not None:
             kwargs["input_fidelity"] = self._config.input_fidelity
 
         result = self._client.images.edit(
             model=self._config.model,
-            image=[band_file],
+            image=[ref_file],
+            mask=mask_file,
             prompt=simple_prompt,
             size="1024x1024",
             **kwargs,
@@ -100,7 +115,7 @@ class OpenAITileGeneratorClient(TileGeneratorClient):
         if tile.size != (TILE_PX, TILE_PX):
             raise GeneratorPermanentError(f"Bad tile size: {tile.size}")
 
-        # Preserve the far KEEP region (256px) exactly (your existing behavior).
+        # Preserve the far KEEP region (256px) exactly (existing behavior).
         return self._post_enforce_conditioning_keep(tile, band, mode)
 
     def _post_enforce_conditioning_keep(self, tile: Image.Image, band: Image.Image, mode: ExtendMode) -> Image.Image:
@@ -121,28 +136,31 @@ class OpenAITileGeneratorClient(TileGeneratorClient):
 
 
 def _build_simple_prompt(*, mode: ExtendMode, user_prompt: str) -> str:
-    # This is intentionally “front-end simple”, matching your known-good UI prompt style.
     user_prompt = (user_prompt or "").strip()
 
     if mode == "x_ltr":
         return (
-            "Extend this image *continuously* to the right so that it becomes 1024x1024. "
-            f"In the new region, satisfy the prompt: {user_prompt}"
+            "Extend this image continuously to the right so that it becomes 1024x1024. "
+            "Maintain the existing style and content. "
+            f"The new region needs one new detail at least: {user_prompt}"
         )
     if mode == "x_rtl":
         return (
-            "Extend this image *continuously* to the left so that it becomes 1024x1024. "
-            f"In the new region, satisfy the prompt: {user_prompt}"
+            "Extend this image continuously to the left so that it becomes 1024x1024. "
+            "Maintain the existing style and content. "
+            f"The new region needs one new detail at least: {user_prompt}"
         )
     if mode == "y_ttb":
         return (
-            "Extend this image *continuously* downward so that it becomes 1024x1024. "
-            f"In the new region, satisfy the prompt: {user_prompt}"
+            "Extend this image continuously downward so that it becomes 1024x1024. "
+            "Maintain the existing style and content. "
+            f"The new region needs one new detail at least: {user_prompt}"
         )
     if mode == "y_btt":
         return (
-            "Extend this image *continuously* upward so that it becomes 1024x1024. "
-            f"In the new region, satisfy the prompt: {user_prompt}"
+            "Extend this image continuously upward so that it becomes 1024x1024. "
+            "Maintain the existing style and content. "
+            f"The new region needs one new detail at least: {user_prompt}"
         )
 
     raise ValueError(f"Unknown mode: {mode}")

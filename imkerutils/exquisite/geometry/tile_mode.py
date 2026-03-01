@@ -17,17 +17,24 @@ HALF_PX = 512
 # Conditioning band thickness (what we extract from the current canvas frontier).
 BAND_PX = 512
 
-# Overlap/advance contract (YOUR WHITE-DIAGRAM CONTRACT):
-# - we overwrite OVERLAP_PX of existing canvas frontier
-# - we advance (net growth) by ADVANCE_PX per step
+# UPDATED CONTRACT: "paste full model output tile back in (no trimming)"
 #
-# With BAND_PX=512 and OVERLAP_PX=256, the "trimmed extension" we splice back in
-# has thickness (1024 - 256) = 768 along the extension axis:
-#   [overlap 256 (conditioning-side)] + [advance 512 (generated-side)]
-OVERLAP_PX = 256
-ADVANCE_PX = 512  # each step grows by 512
+# Interpretation:
+# - The model produces a full 1024x1024 tile.
+# - The "conditioning half" is 512px thick (matches BAND_PX).
+# - When gluing, we overlap by the full conditioning half (512px),
+#   so we paste the full 1024px tile shifted so that:
+#
+#   x_ltr:
+#     tile[0:512] overlaps canvas[w-512:w]
+#     tile[512:1024] becomes new content beyond the frontier
+#
+# - Net growth per step remains 512px (ADVANCE_PX).
+OVERLAP_PX = HALF_PX          # 512
+ADVANCE_PX = 512              # each step grows by 512
 
-PATCH_PX = OVERLAP_PX + ADVANCE_PX  # 768
+# With OVERLAP=512 and ADVANCE=512, the pasted patch is the FULL TILE (1024).
+PATCH_PX = OVERLAP_PX + ADVANCE_PX  # 1024
 
 # Backward-compatible name: ext_px means "advance per step".
 EXT_PX = ADVANCE_PX
@@ -100,7 +107,7 @@ def split_tile(tile: Image.Image, mode: ExtendMode) -> Tuple[Image.Image, Image.
       - cond_half: the half that must match conditioning pixels (after post-enforce)
       - new_half:  the other half (generated half)
 
-    Split point is ALWAYS HALF_PX=512, regardless of ADVANCE_PX.
+    Split point is ALWAYS HALF_PX=512.
     """
     tile = _require_rgb(tile)
     if tile.size != (TILE_PX, TILE_PX):
@@ -131,48 +138,41 @@ def split_tile(tile: Image.Image, mode: ExtendMode) -> Tuple[Image.Image, Image.
 
 def _tile_patch_for_overlap_glue(tile: Image.Image, mode: ExtendMode) -> Image.Image:
     """
-    Returns the "trimmed extension" patch to paste into the output canvas.
+    Returns the patch to paste into the output canvas.
 
-    WHITE-DIAGRAM CONTRACT:
-      start = HALF_PX - OVERLAP_PX = 256
-      end   = HALF_PX + ADVANCE_PX = 1024
-      width = 768 = OVERLAP(256) + ADVANCE(512)
+    NEW CONTRACT: this patch is the FULL TILE.
+
+    start = HALF_PX - OVERLAP_PX = 0
+    end   = HALF_PX + ADVANCE_PX = 1024
     """
     tile = _require_rgb(tile)
     if tile.size != (TILE_PX, TILE_PX):
         raise ValueError(f"Tile must be {TILE_PX}x{TILE_PX}, got {tile.size}")
 
-    a = HALF_PX - OVERLAP_PX              # 256
-    b = HALF_PX + ADVANCE_PX              # 1024
-    if b != TILE_PX:
-        raise AssertionError(f"Unexpected patch end b={b} (expected {TILE_PX})")
+    a = HALF_PX - OVERLAP_PX  # 0
+    b = HALF_PX + ADVANCE_PX  # 1024
+    if a != 0 or b != TILE_PX:
+        raise AssertionError(f"Unexpected patch bounds a={a}, b={b}, expected a=0, b={TILE_PX}")
 
-    if mode in ("x_ltr", "x_rtl"):
-        patch = tile.crop((a, 0, b, TILE_PX))  # 768x1024
-        print("PATCH_CROP", "mode=", mode, "a=", a, "b=", b, "patch.size=", patch.size)
-        if patch.size != (PATCH_PX, TILE_PX):
-            raise AssertionError(f"Patch size mismatch: {patch.size}")
-        return patch
-
-    if mode in ("y_ttb", "y_btt"):
-        patch = tile.crop((0, a, TILE_PX, b))  # 1024x768
-        print("PATCH_CROP", "mode=", mode, "a=", a, "b=", b, "patch.size=", patch.size)
-        if patch.size != (TILE_PX, PATCH_PX):
-            raise AssertionError(f"Patch size mismatch: {patch.size}")
-        return patch
-
-    raise ValueError(f"Unknown mode: {mode}")
+    # Patch is the full tile for all modes.
+    return tile
 
 
 def glue(canvas: Image.Image, tile: Image.Image, mode: ExtendMode) -> Image.Image:
     """
-    GLUE CONTRACT (WHITE-DIAGRAM CONTRACT):
+    NEW GLUE CONTRACT: paste FULL TILE back in (no trimming).
 
-    x_ltr (grow RIGHT by +512):
-      paste 768px patch at x = w - 256  (ends at w + 512)
+    Canvas grows by ADVANCE_PX (=512) per step.
 
-    x_rtl (grow LEFT by +512):
-      shift old right by 512 then paste 768px patch at x = 0
+    x_ltr:
+      out size = (w + 512, h)
+      paste full 1024 tile at x = w - 512
+      so tile[0:512] overlaps the frontier 512px of the existing canvas,
+      tile[512:1024] is the new region.
+
+    x_rtl:
+      out size = (w + 512, h)
+      shift old right by 512, paste full tile at x = 0.
 
     y modes analogous.
     """
@@ -180,74 +180,36 @@ def glue(canvas: Image.Image, tile: Image.Image, mode: ExtendMode) -> Image.Imag
     tile = _require_rgb(tile)
     w, h = canvas.size
 
-    print(
-        "GLUE",
-        "mode=", mode,
-        "canvas=", canvas.size,
-        "tile=", tile.size,
-        "OVERLAP=", OVERLAP_PX,
-        "ADVANCE=", ADVANCE_PX,
-        "PATCH=", PATCH_PX,
-    )
-
     if mode in ("x_ltr", "x_rtl"):
         if h != TILE_PX:
             raise ValueError(f"Phase A requires canvas height == {TILE_PX}, got {h}")
 
-        patch = _tile_patch_for_overlap_glue(tile, mode)  # 768x1024
         out = Image.new("RGB", (w + ADVANCE_PX, h))
 
         if mode == "x_ltr":
-            paste_x = w - OVERLAP_PX
-            print(
-                "GLUE_PASTE",
-                "mode=x_ltr",
-                "paste_x=", paste_x,
-                "patch_end_x=", paste_x + patch.size[0],
-                "out_w=", out.size[0],
-            )
             out.paste(canvas, (0, 0))
-            out.paste(patch, (paste_x, 0))
+            paste_x = w - OVERLAP_PX  # w - 512
+            out.paste(tile, (paste_x, 0))
         else:
-            print(
-                "GLUE_PASTE",
-                "mode=x_rtl",
-                "shift_old_x=", ADVANCE_PX,
-                "patch_end_x=", patch.size[0],
-                "out_w=", out.size[0],
-            )
             out.paste(canvas, (ADVANCE_PX, 0))
-            out.paste(patch, (0, 0))
+            out.paste(tile, (0, 0))
+
         return out
 
     if mode in ("y_ttb", "y_btt"):
         if w != TILE_PX:
             raise ValueError(f"Phase A requires canvas width == {TILE_PX}, got {w}")
 
-        patch = _tile_patch_for_overlap_glue(tile, mode)  # 1024x768
         out = Image.new("RGB", (w, h + ADVANCE_PX))
 
         if mode == "y_ttb":
-            paste_y = h - OVERLAP_PX
-            print(
-                "GLUE_PASTE",
-                "mode=y_ttb",
-                "paste_y=", paste_y,
-                "patch_end_y=", paste_y + patch.size[1],
-                "out_h=", out.size[1],
-            )
             out.paste(canvas, (0, 0))
-            out.paste(patch, (0, paste_y))
+            paste_y = h - OVERLAP_PX  # h - 512
+            out.paste(tile, (0, paste_y))
         else:
-            print(
-                "GLUE_PASTE",
-                "mode=y_btt",
-                "shift_old_y=", ADVANCE_PX,
-                "patch_end_y=", patch.size[1],
-                "out_h=", out.size[1],
-            )
             out.paste(canvas, (0, ADVANCE_PX))
-            out.paste(patch, (0, 0))
+            out.paste(tile, (0, 0))
+
         return out
 
     raise ValueError(f"Unknown mode: {mode}")

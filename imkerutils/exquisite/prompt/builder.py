@@ -41,5 +41,8 @@ def build_prompt_payload(
         negative=negative,
     )
 
+    print("API FACING PROMPT:")
+    print(full, "\n---END PROMPT---\n")
+
     h = hashlib.sha256(full.encode("utf-8")).hexdigest()
     return PromptPayload(full_prompt=full, sha256_hex=h)

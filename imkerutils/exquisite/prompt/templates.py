@@ -57,30 +57,41 @@ def render_prompt(
 
     Note: style_lock/negative are accepted only to preserve the public API,
     but are intentionally not used.
+    IMPORTANT: Do not rescale the image I give you in any way in output.
     """
     user_prompt = (user_prompt or "").strip()
 
-    base_prompt = " -- This image is being glued back into a large image, so it is important to try to keep existing region as is. Use your genertion tool, but try to get good match on these existing pixels."
-
     if mode == "x_ltr":
         return (
-            "Extend this image *continuously* to the right so that it becomes 1024x1024. "
-            f"In the new region, satisfy the prompt: {user_prompt}" + base_prompt
+            "Extend this image continuously to the right so that it becomes 1024x1024."
+            "This image is being glued back into a large image, so it is important to try to keep existing region as is."
+            "Use your genertion tool, but try to get good match on these existing pixels."
+            "Do not change the scale, framing, or vertical alignment of the existing image."
+            f"The new region needs one new detail at least: {user_prompt}"
         )
     if mode == "x_rtl":
         return (
-            "Extend this image *continuously* to the left so that it becomes 1024x1024. "
-            f"In the new region, satisfy the prompt: {user_prompt}" + base_prompt
+            "Extend this image continuously to the right so that it becomes 1024x1024."
+            "This image is being glued back into a large image, so it is important to try to keep existing region as is."
+            "Use your genertion tool, but try to get good match on these existing pixels."
+            "Do not change the scale, framing, or vertical alignment of the existing image."
+            f"The new region needs one new detail at least: {user_prompt}"
         )
     if mode == "y_ttb":
         return (
-            "Extend this image *continuously* downward so that it becomes 1024x1024. "
-            f"In the new region, satisfy the prompt: {user_prompt}" + base_prompt
+            "Extend this image continuously to the right so that it becomes 1024x1024."
+            "This image is being glued back into a large image, so it is important to try to keep existing region as is."
+            "Use your genertion tool, but try to get good match on these existing pixels."
+            "Do not change the scale, framing, or vertical alignment of the existing image."
+            f"The new region needs one new detail at least: {user_prompt}"
         )
     if mode == "y_btt":
         return (
-            "Extend this image *continuously* upward so that it becomes 1024x1024. "
-            f"In the new region, satisfy the prompt: {user_prompt}" + base_prompt
+            "Extend this image continuously to the right so that it becomes 1024x1024."
+            "This image is being glued back into a large image, so it is important to try to keep existing region as is."
+            "Use your genertion tool, but try to get good match on these existing pixels."
+            "Do not change the scale, framing, or vertical alignment of the existing image."
+            f"The new region needs one new detail at least: {user_prompt}"
         )
 
     raise ValueError(f"Unknown mode: {mode}")

@@ -18,6 +18,9 @@ from imkerutils.exquisite.pipeline.session import ExquisiteSession
 ExtendMode = str  # "x_ltr" | "x_rtl" | "y_ttb" | "y_btt"
 VIEWPORT_PX = 1024
 
+# /.../imkerutils/exquisite/ui/server.py -> /.../imkerutils/exquisite/assets
+ASSETS_ROOT = Path(__file__).resolve().parents[1] / "assets"
+
 
 class ReuseHTTPServer(HTTPServer):
     allow_reuse_address = True
@@ -45,6 +48,8 @@ class ExquisiteHandler(BaseHTTPRequestHandler):
                 self._serve_canvas()
             elif self.path == "/state.json":
                 self._serve_state()
+            elif self.path.startswith("/assets/"):
+                self._serve_asset()
             else:
                 self.send_error(404)
         except Exception:
@@ -88,6 +93,14 @@ class ExquisiteHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b)
 
+    def _send_bytes(self, *, status: int, content_type: str, data: bytes, cache: str = "no-store") -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", cache)
+        self.end_headers()
+        self.wfile.write(data)
+
     # ------------------------
     # routes
 
@@ -117,12 +130,26 @@ class ExquisiteHandler(BaseHTTPRequestHandler):
   .wrap {
     width: 100%;
     margin: 0;
-    padding: 8px;            /* small breathing room; set to 0 if you want true edge-to-edge */
+    padding: 8px;            /* set to 0 if you want true edge-to-edge */
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
     flex: 1;
     gap: 8px;
+  }
+
+  .logoRow {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    background: #000;
+    padding: 20;           /* or 8px */
+    border-radius: 25;
+  }
+  #projectLogo {
+    height: 125px;
+    width: auto;
+    display: block;
   }
 
   /* Fixed “page” area above the prompt. */
@@ -243,6 +270,10 @@ class ExquisiteHandler(BaseHTTPRequestHandler):
 
 <body>
 <div class="wrap">
+
+  <div class="logoRow">
+    <img id="projectLogo" src="/assets/images/logo_trimmed_silver.png" alt="Exquisite"/>
+  </div>
 
   <div class="viewport">
     <div id="scroller" class="scroller">
@@ -429,12 +460,44 @@ class ExquisiteHandler(BaseHTTPRequestHandler):
         img.save(buf, format="PNG")
         b = buf.getvalue()
 
-        self.send_response(200)
-        self.send_header("Content-Type", "image/png")
-        self.send_header("Content-Length", str(len(b)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(b)
+        self._send_bytes(status=200, content_type="image/png", data=b, cache="no-store")
+
+    def _serve_asset(self) -> None:
+        # URL path like: /assets/images/logo_trimmed_silver.png
+        rel = self.path[len("/assets/") :]
+        rel = rel.split("?", 1)[0].split("#", 1)[0]
+        rel = rel.lstrip("/")
+
+        # prevent traversal
+        try:
+            target = (ASSETS_ROOT / rel).resolve()
+            root = ASSETS_ROOT.resolve()
+            if root not in target.parents and target != root:
+                self.send_error(400, "bad asset path")
+                return
+        except Exception:
+            self.send_error(400, "bad asset path")
+            return
+
+        if not target.exists() or not target.is_file():
+            self.send_error(404)
+            return
+
+        ext = target.suffix.lower()
+        if ext == ".png":
+            ctype = "image/png"
+        elif ext in (".jpg", ".jpeg"):
+            ctype = "image/jpeg"
+        elif ext == ".webp":
+            ctype = "image/webp"
+        elif ext == ".svg":
+            ctype = "image/svg+xml"
+        else:
+            ctype = "application/octet-stream"
+
+        data = target.read_bytes()
+        # cache assets a bit; change to no-store if you keep editing logo
+        self._send_bytes(status=200, content_type=ctype, data=data, cache="max-age=3600")
 
     def _handle_step(self) -> None:
         if not self.session:
