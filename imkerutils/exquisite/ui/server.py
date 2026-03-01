@@ -130,7 +130,7 @@ class ExquisiteHandler(BaseHTTPRequestHandler):
   .wrap {
     width: 100%;
     margin: 0;
-    padding: 8px;            /* set to 0 if you want true edge-to-edge */
+    padding: 8px;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
@@ -143,7 +143,7 @@ class ExquisiteHandler(BaseHTTPRequestHandler):
     align-items: center;
     justify-content: flex-start;
     background: #000;
-    padding: 20;           /* or 8px */
+    padding: 20;
     border-radius: 25;
   }
   #projectLogo {
@@ -159,10 +159,9 @@ class ExquisiteHandler(BaseHTTPRequestHandler):
     background: #000;
     border: 1px solid #333;
     border-radius: 8px;
-    overflow: hidden; /* rounds corners for scroller content */
+    overflow: hidden;
   }
 
-  /* Browser-native scrolling container */
   .scroller {
     position: absolute;
     inset: 0;
@@ -170,7 +169,6 @@ class ExquisiteHandler(BaseHTTPRequestHandler):
     background: #000;
   }
 
-  /* Scale image by HEIGHT so it fills viewport height */
   img#canvasImg {
     display: block;
     height: 100%;
@@ -215,7 +213,6 @@ class ExquisiteHandler(BaseHTTPRequestHandler):
     cursor: not-allowed;
   }
 
-  /* Status strip (spinner + elapsed time) */
   .statusbar {
     display: flex;
     align-items: center;
@@ -235,7 +232,7 @@ class ExquisiteHandler(BaseHTTPRequestHandler):
     border-top-color: #2d7;
     border-radius: 50%;
     animation: spin 0.9s linear infinite;
-    display: none; /* hidden unless running */
+    display: none;
   }
 
   .statusbar.running .spinner {
@@ -264,6 +261,62 @@ class ExquisiteHandler(BaseHTTPRequestHandler):
     border: 1px solid #442;
     border-radius: 8px;
     background: #150b0b;
+  }
+
+  /* -------- Modal popup -------- */
+  .modalBackdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.72);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 18px;
+    z-index: 9999;
+  }
+  .modalBackdrop.show {
+    display: flex;
+  }
+  .modal {
+    width: min(920px, 100%);
+    background: #0b0b0b;
+    border: 1px solid #333;
+    border-radius: 12px;
+    box-shadow: 0 18px 60px rgba(0,0,0,0.6);
+    overflow: hidden;
+  }
+  .modalHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    border-bottom: 1px solid #222;
+    background: #070707;
+    color: #eee;
+    font-weight: 800;
+  }
+  .modalBody {
+    padding: 14px;
+    color: #ffb3b3;
+    white-space: pre-wrap;
+    font-size: 13px;
+    line-height: 1.35;
+  }
+  .modalActions {
+    display: flex;
+    gap: 10px;
+    padding: 12px 14px;
+    border-top: 1px solid #222;
+    background: #070707;
+  }
+  .btnSecondary {
+    background: #222;
+    color: #eee;
+    border: 1px solid #333;
+  }
+  .btnDonate {
+    background: #ffcf40;
+    color: #111;
   }
 </style>
 </head>
@@ -296,6 +349,21 @@ class ExquisiteHandler(BaseHTTPRequestHandler):
 
 </div>
 
+<!-- Modal (error popup) -->
+<div id="modalBackdrop" class="modalBackdrop" role="dialog" aria-modal="true" aria-label="Error">
+  <div class="modal">
+    <div class="modalHeader">
+      <div id="modalTitle">Step rejected</div>
+      <button id="modalCloseBtn" class="btnSecondary">Close</button>
+    </div>
+    <div id="modalBody" class="modalBody"></div>
+    <div id="modalActions" class="modalActions" style="display:none;">
+      <button id="donateBtn" class="btnDonate">Donate (coming soon)</button>
+      <button id="contactBtn" class="btnSecondary">Contact administrator</button>
+    </div>
+  </div>
+</div>
+
 <script>
   const scroller = document.getElementById("scroller");
   const img = document.getElementById("canvasImg");
@@ -306,6 +374,15 @@ class ExquisiteHandler(BaseHTTPRequestHandler):
 
   const statusbar = document.getElementById("statusbar");
   const statusText = document.getElementById("statusText");
+
+  // Modal elements
+  const modalBackdrop = document.getElementById("modalBackdrop");
+  const modalTitle = document.getElementById("modalTitle");
+  const modalBody = document.getElementById("modalBody");
+  const modalActions = document.getElementById("modalActions");
+  const modalCloseBtn = document.getElementById("modalCloseBtn");
+  const donateBtn = document.getElementById("donateBtn");
+  const contactBtn = document.getElementById("contactBtn");
 
   let timerHandle = null;
   let t0 = 0;
@@ -361,6 +438,69 @@ class ExquisiteHandler(BaseHTTPRequestHandler):
     }
   }
 
+  function isBillingish(text) {
+    const s = String(text || "").toLowerCase();
+    if (!s) return false;
+    // keep this intentionally broad; you can tighten later
+    const needles = [
+      "bill", "billing", "payment", "pay", "paid",
+      "card", "credit", "invoice", "limit", "quota",
+      "hard limit", "soft limit", "plan", "upgrade",
+      "insufficient funds"
+    ];
+    for (const n of needles) {
+      if (s.indexOf(n) !== -1) return true;
+    }
+    return false;
+  }
+
+  function showModalError(title, message) {
+    const msg = String(message || "");
+    const billing = isBillingish(msg);
+
+    modalTitle.textContent = title || "Error";
+    modalBody.textContent = msg;
+
+    if (billing) {
+      // Add the required extra messaging
+      modalBody.textContent =
+        msg +
+        "\\n\\n" +
+        "⚠️ This looks like a billing / payment / quota issue.\\n" +
+        "• Contact the EXQUISITE sytem administrators... if you know how to find them.\\n" +
+        "• Donate: coming soon (we'll wire this to payments later).";
+
+      modalActions.style.display = "flex";
+    } else {
+      modalActions.style.display = "none";
+    }
+
+    modalBackdrop.classList.add("show");
+  }
+
+  function hideModal() {
+    modalBackdrop.classList.remove("show");
+  }
+
+  modalCloseBtn.addEventListener("click", function() {
+    hideModal();
+  });
+
+  // Clicking outside closes too
+  modalBackdrop.addEventListener("click", function(e) {
+    if (e.target === modalBackdrop) hideModal();
+  });
+
+  donateBtn.addEventListener("click", function() {
+    // Placeholder; you’ll wire real payments later.
+    alert("Donate is not wired yet (coming soon).");
+  });
+
+  contactBtn.addEventListener("click", function() {
+    // Placeholder; you’ll wire real contacts later.
+    alert("Contact EXQUISITE system administrators to resolve billing/payment limits... If y'know, y'know.");
+  });
+
   async function refresh() {
     err.textContent = "";
     const r = await fetch("/state.json", {cache: "no-store"});
@@ -384,6 +524,17 @@ class ExquisiteHandler(BaseHTTPRequestHandler):
     });
   }
 
+  function summarizeStepError(out) {
+    // Prefer structured field if present
+    if (out && typeof out === "object") {
+      if (out.rejection_reason) return String(out.rejection_reason);
+      if (out.detail) return String(out.detail);
+      if (out.error) return String(out.error);
+      return JSON.stringify(out, null, 2);
+    }
+    return String(out || "");
+  }
+
   btn.addEventListener("click", async function() {
     btn.disabled = true;
     err.textContent = "";
@@ -403,18 +554,30 @@ class ExquisiteHandler(BaseHTTPRequestHandler):
       out = await r.json().catch(function() { return {}; });
     } catch (e) {
       setStatusIdle();
-      err.textContent = "network error: " + String(e);
+      showModalError("Network error", "network error: " + String(e));
       btn.disabled = false;
       return;
     }
 
+    // HTTP-level failure
     if (!r.ok) {
       setStatusIdle();
-      err.textContent = "step error:\\n" + JSON.stringify(out, null, 2);
+      const msg = "step HTTP error:\\n" + summarizeStepError(out);
+      showModalError("Step rejected", msg);
       btn.disabled = false;
       return;
     }
 
+    // App-level rejection (still HTTP 200)
+    if (out && out.status === "rejected") {
+      setStatusIdle();
+      const msg = summarizeStepError(out) || "rejected_without_reason";
+      showModalError("Step rejected", msg);
+      btn.disabled = false;
+      return;
+    }
+
+    // Success
     await refresh();
     setStatusIdle();
     btn.disabled = false;

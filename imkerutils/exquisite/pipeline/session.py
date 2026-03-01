@@ -42,6 +42,7 @@ class DiskStepResult:
     canvas_before_size: Tuple[int, int]
     canvas_after_size: Tuple[int, int]
     step_dir: str
+    rejection_reason: str = ""  # NEW: always present (empty when committed)
 
 
 # -----------------------------
@@ -255,9 +256,25 @@ class ExquisiteSession:
         step_dir.mkdir(parents=True, exist_ok=True)
 
         if mode in ("x_ltr", "x_rtl") and h0 != TILE_PX:
-            return DiskStepResult("rejected", self.state.session_id, step_index_next, (w0, h0), (w0, h0), str(step_dir))
+            return DiskStepResult(
+                "rejected",
+                self.state.session_id,
+                step_index_next,
+                (w0, h0),
+                (w0, h0),
+                str(step_dir),
+                rejection_reason="CanvasHeightNot1024",
+            )
         if mode in ("y_ttb", "y_btt") and w0 != TILE_PX:
-            return DiskStepResult("rejected", self.state.session_id, step_index_next, (w0, h0), (w0, h0), str(step_dir))
+            return DiskStepResult(
+                "rejected",
+                self.state.session_id,
+                step_index_next,
+                (w0, h0),
+                (w0, h0),
+                str(step_dir),
+                rejection_reason="CanvasWidthNot1024",
+            )
 
         band = extract_conditioning_band(canvas, mode)
 
@@ -271,14 +288,30 @@ class ExquisiteSession:
 
         cond_half, _new_half = split_tile(tile, mode)
         if enforce_band_identity and (cond_half.tobytes() != band.tobytes()):
-            return DiskStepResult("rejected", self.state.session_id, step_index_next, (w0, h0), (w0, h0), str(step_dir))
+            return DiskStepResult(
+                "rejected",
+                self.state.session_id,
+                step_index_next,
+                (w0, h0),
+                (w0, h0),
+                str(step_dir),
+                rejection_reason="BandIdentityMismatch",
+            )
 
         canvas_next = _glue_with_feather(canvas=canvas, tile=tile, mode=mode, feather_px=feather_px)
         w1, h1 = canvas_next.size
 
         exp_w, exp_h = expected_next_canvas_size(canvas, mode)
         if (w1, h1) != (exp_w, exp_h):
-            return DiskStepResult("rejected", self.state.session_id, step_index_next, (w0, h0), (w0, h0), str(step_dir))
+            return DiskStepResult(
+                "rejected",
+                self.state.session_id,
+                step_index_next,
+                (w0, h0),
+                (w0, h0),
+                str(step_dir),
+                rejection_reason=f"CanvasDimInvariantViolation: got {(w1, h1)} expected {(exp_w, exp_h)}",
+            )
 
         atomic_write_text(step_dir / "prompt.txt", prompt + "\n")
         atomic_write_with(step_dir / "conditioning_band.png", lambda p: band.save(p, format="PNG"))
@@ -320,9 +353,25 @@ class ExquisiteSession:
         step_dir.mkdir(parents=True, exist_ok=True)
 
         if mode in ("x_ltr", "x_rtl") and h0 != TILE_PX:
-            return DiskStepResult("rejected", self.state.session_id, step_index_next, (w0, h0), (w0, h0), str(step_dir))
+            return DiskStepResult(
+                "rejected",
+                self.state.session_id,
+                step_index_next,
+                (w0, h0),
+                (w0, h0),
+                str(step_dir),
+                rejection_reason="CanvasHeightNot1024",
+            )
         if mode in ("y_ttb", "y_btt") and w0 != TILE_PX:
-            return DiskStepResult("rejected", self.state.session_id, step_index_next, (w0, h0), (w0, h0), str(step_dir))
+            return DiskStepResult(
+                "rejected",
+                self.state.session_id,
+                step_index_next,
+                (w0, h0),
+                (w0, h0),
+                str(step_dir),
+                rejection_reason="CanvasWidthNot1024",
+            )
 
         band = extract_conditioning_band(canvas, mode)
 
@@ -339,15 +388,42 @@ class ExquisiteSession:
                 step_index=step_index_next,
             ).convert("RGB")
         except GeneratorError as e:
-            atomic_write_text(step_dir / "rejected.err", f"GeneratorError: {e}\n")
-            return DiskStepResult("rejected", self.state.session_id, step_index_next, (w0, h0), (w0, h0), str(step_dir))
+            msg = f"GeneratorError: {e}"
+            atomic_write_text(step_dir / "rejected.err", msg + "\n")
+            return DiskStepResult(
+                "rejected",
+                self.state.session_id,
+                step_index_next,
+                (w0, h0),
+                (w0, h0),
+                str(step_dir),
+                rejection_reason=msg,
+            )
         except Exception as e:
-            atomic_write_text(step_dir / "rejected.err", f"Exception: {type(e).__name__}: {e}\n")
-            return DiskStepResult("rejected", self.state.session_id, step_index_next, (w0, h0), (w0, h0), str(step_dir))
+            msg = f"Exception: {type(e).__name__}: {e}"
+            atomic_write_text(step_dir / "rejected.err", msg + "\n")
+            return DiskStepResult(
+                "rejected",
+                self.state.session_id,
+                step_index_next,
+                (w0, h0),
+                (w0, h0),
+                str(step_dir),
+                rejection_reason=msg,
+            )
 
         if tile.size != (TILE_PX, TILE_PX):
-            atomic_write_text(step_dir / "rejected.err", f"BadTileSize: {tile.size}\n")
-            return DiskStepResult("rejected", self.state.session_id, step_index_next, (w0, h0), (w0, h0), str(step_dir))
+            msg = f"BadTileSize: {tile.size}"
+            atomic_write_text(step_dir / "rejected.err", msg + "\n")
+            return DiskStepResult(
+                "rejected",
+                self.state.session_id,
+                step_index_next,
+                (w0, h0),
+                (w0, h0),
+                str(step_dir),
+                rejection_reason=msg,
+            )
 
         if post_enforce_band_identity:
             tile = _post_enforce_keep_into_tile(tile=tile, band=band, mode=mode)
@@ -368,8 +444,17 @@ class ExquisiteSession:
 
         exp_w, exp_h = expected_next_canvas_size(canvas, mode)
         if (w1, h1) != (exp_w, exp_h):
-            atomic_write_text(step_dir / "rejected.err", f"CanvasDimInvariantViolation: got {(w1,h1)} expected {(exp_w,exp_h)}\n")
-            return DiskStepResult("rejected", self.state.session_id, step_index_next, (w0, h0), (w0, h0), str(step_dir))
+            msg = f"CanvasDimInvariantViolation: got {(w1, h1)} expected {(exp_w, exp_h)}"
+            atomic_write_text(step_dir / "rejected.err", msg + "\n")
+            return DiskStepResult(
+                "rejected",
+                self.state.session_id,
+                step_index_next,
+                (w0, h0),
+                (w0, h0),
+                str(step_dir),
+                rejection_reason=msg,
+            )
 
         atomic_write_with(step_dir / "canvas_after.png", lambda p: canvas_next.save(p, format="PNG"))
         atomic_write_with(self.state.canvas_path, lambda p: canvas_next.save(p, format="PNG"))
