@@ -108,7 +108,7 @@ class ExquisiteHandler(BaseHTTPRequestHandler):
         # IMPORTANT:
         # - NOT an f-string.
         # - Avoid JS template literals (`...${}...`) so braces never collide with Python formatting.
-        html = """\
+        html = r"""\
 <!doctype html>
 <html>
 <head>
@@ -384,6 +384,9 @@ class ExquisiteHandler(BaseHTTPRequestHandler):
   const donateBtn = document.getElementById("donateBtn");
   const contactBtn = document.getElementById("contactBtn");
 
+  // TODO: set to your real admin/support email (consider an alias to reduce spam)
+  const ADMIN_EMAIL = "tylerisnotavailable@gmail.com";
+
   let timerHandle = null;
   let t0 = 0;
 
@@ -441,7 +444,6 @@ class ExquisiteHandler(BaseHTTPRequestHandler):
   function isBillingish(text) {
     const s = String(text || "").toLowerCase();
     if (!s) return false;
-    // keep this intentionally broad; you can tighten later
     const needles = [
       "bill", "billing", "payment", "pay", "paid",
       "card", "credit", "invoice", "limit", "quota",
@@ -454,23 +456,103 @@ class ExquisiteHandler(BaseHTTPRequestHandler):
     return false;
   }
 
+  function parseSafetyViolations(text) {
+    const s = String(text || "");
+    const m = s.match(/safety_violations=\[([^\]]*)\]/i);
+    if (!m) return [];
+    const raw = (m[1] || "").trim();
+    if (!raw) return [];
+    return raw.split(",").map(function(x) { return x.trim(); }).filter(Boolean);
+  }
+
+  function extractRequestId(text) {
+    // Example: "... include the request ID req_abc123..."
+    const s = String(text || "");
+    const m = s.match(/\breq_[a-zA-Z0-9]+\b/);
+    return m ? m[0] : "";
+  }
+
+  function isModerationBlocked(text) {
+    const s = String(text || "").toLowerCase();
+    if (!s) return false;
+    return (s.indexOf("moderation_blocked") !== -1) || (s.indexOf("safety system") !== -1);
+  }
+
+  function ipHintFromPrompt(prompt) {
+    // Light heuristic only. Keeps wording as "might be".
+    const s = String(prompt || "").toLowerCase();
+
+    // Common “named IP” signals (add/trim as you like)
+    const needles = [
+      "marvel", "dc", "x-men", "xmen", "avengers",
+      "wolverine", "magneto", "cyclops", "jean grey",
+      "pokemon", "pikachu", "disney", "star wars",
+      "harry potter", "hogwarts", "naruto", "dragon ball",
+      "goku", "vegeta", "one piece"
+    ];
+
+    for (const n of needles) {
+      if (s.indexOf(n) !== -1) return true;
+    }
+    return false;
+  }
+
+  function moderationExplanation(violations, requestId, promptText) {
+    // If we have explicit categories, be specific.
+    if (violations && violations.length > 0) {
+      const v = violations.join(", ");
+      return (
+        "⚠️ This request was blocked by the safety system (" + v + ").\n" +
+        "Try rephrasing to remove disallowed content in that category.\n" +
+        (requestId ? ("If you think this was a mistake, contact support and include request ID " + requestId + ".") :
+                     "If you think this was a mistake, contact support and include the request ID shown above.")
+      );
+    }
+
+    // Otherwise: do NOT claim nudity/violence—be neutral and mention common causes.
+    const maybeIp = ipHintFromPrompt(promptText);
+    const lead = maybeIp
+      ? "⚠️ This request was blocked by policy. Because your prompt mentions well-known characters/titles, this might be an IP/copyright restriction.\n"
+      : "⚠️ This request was blocked by policy.\n";
+
+    return (
+      lead +
+      "Common causes include:\n" +
+      "• copyrighted / trademarked characters or franchises\n" +
+      "• sexual content (especially explicit nudity)\n" +
+      "• graphic violence or other disallowed content\n\n" +
+      "Try: describe an ORIGINAL character with similar vibes instead of naming a franchise.\n" +
+      (requestId ? ("If you think this was a mistake, contact support and include request ID " + requestId + ".") :
+                   "If you think this was a mistake, contact support and include the request ID shown above.")
+    );
+  }
+
   function showModalError(title, message) {
     const msg = String(message || "");
     const billing = isBillingish(msg);
+    const moderation = isModerationBlocked(msg);
+    const violations = parseSafetyViolations(msg);
+    const reqId = extractRequestId(msg);
 
     modalTitle.textContent = title || "Error";
     modalBody.textContent = msg;
 
     if (billing) {
-      // Add the required extra messaging
       modalBody.textContent =
         msg +
-        "\\n\\n" +
-        "⚠️ This looks like a billing / payment / quota issue.\\n" +
-        "• Contact the EXQUISITE sytem administrators... if you know how to find them.\\n" +
+        "\n\n" +
+        "⚠️ This looks like a billing / payment / quota issue.\n" +
+        "• Contact the EXQUISITE system administrators... if you know how to find them.\n" +
         "• Donate: coming soon (we'll wire this to payments later).";
 
       modalActions.style.display = "flex";
+    } else if (moderation) {
+      modalBody.textContent =
+        msg +
+        "\n\n" +
+        moderationExplanation(violations, reqId, (promptEl.value || ""));
+
+      modalActions.style.display = "none";
     } else {
       modalActions.style.display = "none";
     }
@@ -486,19 +568,21 @@ class ExquisiteHandler(BaseHTTPRequestHandler):
     hideModal();
   });
 
-  // Clicking outside closes too
   modalBackdrop.addEventListener("click", function(e) {
     if (e.target === modalBackdrop) hideModal();
   });
 
   donateBtn.addEventListener("click", function() {
-    // Placeholder; you’ll wire real payments later.
     alert("Donate is not wired yet (coming soon).");
   });
 
   contactBtn.addEventListener("click", function() {
-    // Placeholder; you’ll wire real contacts later.
-    alert("Contact EXQUISITE system administrators to resolve billing/payment limits... If y'know, y'know.");
+    const subject = encodeURIComponent("Exquisite: billing / quota issue");
+    const body = encodeURIComponent(
+      "Hi,\n\nWe hit a billing/payment/quota error in Exquisite.\n\n(Include screenshot / request ID if present.)\n"
+    );
+    window.location.href =
+      "mailto:" + encodeURIComponent(ADMIN_EMAIL) + "?subject=" + subject + "&body=" + body;
   });
 
   async function refresh() {
@@ -506,15 +590,15 @@ class ExquisiteHandler(BaseHTTPRequestHandler):
     const r = await fetch("/state.json", {cache: "no-store"});
     const st = await r.json();
     if (!r.ok) {
-      err.textContent = "state.json error:\\n" + JSON.stringify(st, null, 2);
+      err.textContent = "state.json error:\n" + JSON.stringify(st, null, 2);
       return;
     }
 
     img.src = "/canvas.png?cb=" + Date.now();
 
     meta.textContent =
-      "mode: " + st.mode + "\\n" +
-      "canvas: " + st.canvas_w + "×" + st.canvas_h + "\\n" +
+      "mode: " + st.mode + "\n" +
+      "canvas: " + st.canvas_w + "×" + st.canvas_h + "\n" +
       "step_index: " + st.step_index;
 
     requestAnimationFrame(function() {
@@ -525,7 +609,6 @@ class ExquisiteHandler(BaseHTTPRequestHandler):
   }
 
   function summarizeStepError(out) {
-    // Prefer structured field if present
     if (out && typeof out === "object") {
       if (out.rejection_reason) return String(out.rejection_reason);
       if (out.detail) return String(out.detail);
@@ -559,16 +642,14 @@ class ExquisiteHandler(BaseHTTPRequestHandler):
       return;
     }
 
-    // HTTP-level failure
     if (!r.ok) {
       setStatusIdle();
-      const msg = "step HTTP error:\\n" + summarizeStepError(out);
+      const msg = "step HTTP error:\n" + summarizeStepError(out);
       showModalError("Step rejected", msg);
       btn.disabled = false;
       return;
     }
 
-    // App-level rejection (still HTTP 200)
     if (out && out.status === "rejected") {
       setStatusIdle();
       const msg = summarizeStepError(out) || "rejected_without_reason";
@@ -577,7 +658,6 @@ class ExquisiteHandler(BaseHTTPRequestHandler):
       return;
     }
 
-    // Success
     await refresh();
     setStatusIdle();
     btn.disabled = false;
